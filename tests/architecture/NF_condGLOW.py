@@ -1,9 +1,18 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+import time
+import os
+import re
+import numba
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import itertools
-from tqdm.notebook import tqdm
+from tqdm import tqdm
+import optuna
 
 class MLP(nn.Module):
     """
@@ -42,11 +51,12 @@ class MLP(nn.Module):
         x.float()
         return self.network(x)
 
+    # def init_weights(m):
+    #     if isinstance(m, nn.Linear):
+    #         torch.nn.kaiming_uniform_(m.weight, a=0, mode='fan_out', nonlinearity='leaky_relu', generator=None)
+    #         m.bias.data.fill_(0.01)
+    
 class GLOW_conv(nn.Module):
-    """
-    GLOW architecture for 1x1 convolutional layers
-    """
-
     def __init__(self, n_dim) -> None:
         super().__init__()
         self.n_dim = n_dim
@@ -92,7 +102,7 @@ class GLOW_conv(nn.Module):
         W_inv = torch.linalg.inv(W)
         x = y.float()@W_inv
         return x, logdetW_inv
-    
+
 class AffineCoupling(nn.Module):
     """
     Affine Coupling layer for conditional normalizing flows.
@@ -126,9 +136,11 @@ class AffineCoupling(nn.Module):
             x_condition (torch.Tensor): Condition tensor.
 
         Returns:
-            y (torch.Tensor): Output tensor after applying the affine coupling layer.
-            logdet (torch.Tensor): Log determinant of the Jacobian.
+            torch.Tensor: Output tensor after applying the affine coupling layer.
+            torch.Tensor: Log determinant of the Jacobian.
         """
+        x.float()
+        x_condition.float()
         x_a, x_b = x.chunk(2, dim=1)
         log_s, t = (self.net_notcond(x_b) * self.net_cond(x_condition)).chunk(2, dim=1)
         # s = torch.exp(log_s)
@@ -149,9 +161,11 @@ class AffineCoupling(nn.Module):
             x_condition (torch.Tensor): Condition tensor.
 
         Returns:
-            x (torch.Tensor): Output tensor.
-            logdet (torch.Tensor): Log determinant of the Jacobian.
+            torch.Tensor: Output tensor.
+            torch.Tensor: Log determinant of the Jacobian.
         """
+        y.float()
+        x_condition.float()
         y_a, y_b = y.chunk(2, dim=1)
         log_s, t = (self.net_notcond(y_b) * self.net_cond(x_condition)).chunk(2, dim=1)
         # s = torch.exp(log_s)
@@ -162,11 +176,9 @@ class AffineCoupling(nn.Module):
         logdet = torch.sum(torch.log(s))
 
         return torch.cat([x_a, x_b], dim=1), logdet
-    
+
 class NF_condGLOW(nn.Module):
-    """
-    Normalizing flow GLOW model with Affine coupling layers for conditional probability estimation. Alternates coupling layers with GLOW convolutions.
-    """
+    """Normalizing flow GLOW model with Affine coupling layers. Alternates coupling layers with GLOW convolutions Combines coupling layers and convolution layers."""
 
     def __init__(self, n_layers, dim_notcond, dim_cond, CL=AffineCoupling, **kwargs_CL):
         """
@@ -196,7 +208,7 @@ class NF_condGLOW(nn.Module):
 
         self.layers = nn.ModuleList(itertools.chain(*zip(conv_layers,coupling_layers)))
         
-        self.prior = torch.distributions.Normal(torch.zeros(dim_notcond), torch.ones(dim_notcond), validate_args=False)
+        self.prior = torch.distributions.MultivariateNormal(torch.zeros(2), torch.eye(2), validate_args=False)
 
         #Information about hyperparameters accessible from outside
         #The function _get_right_hypers below will then reconstruct this back to __init__ arguments, if you change the model, change both.
@@ -237,47 +249,16 @@ class NF_condGLOW(nn.Module):
         x_cond : torch.Tensor
             The condition for the samples. If dim_cond=0 enter torch.Tensor([]).
         """
-        return self.backward(self.prior.sample(torch.Size((number,))), x_cond)[0]
+        return self.backward( self.prior.sample(torch.Size((number,))), x_cond )[0]
     
     def to(self, device):
         #Modified to also move the prior to the right device
         super().to(device)
-        self.prior = torch.distributions.Normal(torch.zeros(self.dim_cond).to(device), torch.ones(self.dim_cond).to(device))
+        self.prior = torch.distributions.Normal(torch.zeros(self.dim_notcond).to(device), torch.ones(self.dim_notcond).to(device))
         return self
-
-def training_flow(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs, lr=2*10**-2, batch_size=1024, loss_saver=None, checkpoint_dir=None, gamma=0.998, optimizer_obj=None):
-    """
-    Training function for the NF_condGLOW model.
-    After training the model can be sampled from
-
-    Parameters
-    ----------
-    flow : NF_condGLOW
-        The model to train.
-    data : pd.DataFrame
-        The data to train on.
-    cond_names : list
-        The names of the columns to condition on.
-    epochs : int
-        The number of epochs to train for.
-    lr : float
-        The learning rate for the optimizer.
-    batch_size : int
-        The batch size.
-    loss_saver : list
-        A list to save the loss in. If None, the loss is not saved.
-    checkpoint_dir : str
-        The directory to save the model in. If None, the model is not saved.
-    gamma : float 
-        The learning rate decay factor.
-    optimizer_obj : torch.optim.Optimizer
-        The optimizer to use. If None, the Adam optimizer is used.
-
-    Returns
-    -------
-    None
     
-    """
+def training_flow(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs, lr=2*10**-2, batch_size=1024, loss_saver=None, checkpoint_dir=None, gamma=0.998, optimizer_obj=None):
+    
     #Device the model is on
     device = flow.parameters().__next__().device
 
@@ -287,6 +268,7 @@ def training_flow(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs,
     #Get index based masks for conditional variables
     mask_cond = np.isin(data.columns.to_list(), cond_names)
     mask_cond = torch.from_numpy(mask_cond).to(device)
+    
 
     # Convert DataFrame to tensor (index based)
     data = torch.from_numpy(data.values).type(torch.float)
@@ -301,7 +283,10 @@ def training_flow(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs,
     lr_schedule = torch.optim.lr_scheduler.ExponentialLR(optimizer=optimizer, gamma=gamma)
 
     #Save losses
-    losses = []
+    if loss_saver is None:
+        losses = []
+    else:
+        losses = loss_saver
 
     #Total number of steps
     ct = 0
@@ -315,10 +300,8 @@ def training_flow(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs,
             x = batch.to(device)
             
             #Evaluate model
-            z, logdet, prior_z_logprob = flow(x[...,~mask_cond], x[...,mask_cond])
-            # print(prior_z_logprob)
-            if prior_z_logprob.isnan().any():
-                break
+            z, logdet, prior_z_logprob = flow(x[..., ~mask_cond], x[..., mask_cond])
+            
             #Get loss
             loss = -torch.mean(logdet+prior_z_logprob) 
             losses.append(loss.item())
@@ -329,16 +312,74 @@ def training_flow(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs,
             loss.backward()
             #Update parameters
             optimizer.step()
+            
+            #Every 5000 steps save model and loss history (checkpoint)
+            if checkpoint_dir != None and ct % 5000 == 0 and not ct == 0:
+                torch.save(flow.state_dict(), f"{checkpoint_dir}checkpoint_{cp%2}.pth")
+                print(f'state dict saved checkpoint_{cp%2}')
+                curr_time = time.perf_counter()
+                np.save(f"{checkpoint_dir}losses_{cp%2}.npy", np.array(loss_saver+[curr_time-start_time]))
+                cp += 1
         
-        ct += 1
+            ct += 1
 
 
-        #Decrease learning rate every 10 steps until it is smaller than 3*10**-6, then every 120 steps
-        if lr_schedule.get_last_lr()[0] <= 3*10**-6:
-            decrease_step = 120
-        else:
-            decrease_step = 10
+            #Decrease learning rate every 10 steps until it is smaller than 3*10**-6, then every 120 steps
+            if lr_schedule.get_last_lr()[0] <= 3*10**-6:
+                decrease_step = 120
+            else:
+                decrease_step = 10
 
-        #Update learning rate every decrease_step steps
-        if ct % decrease_step == 0:
-            lr_schedule.step()
+            #Update learning rate every decrease_step steps
+            if ct % decrease_step == 0:
+                lr_schedule.step()
+            
+device = torch.device("cuda:9" if torch.cuda.is_available() else "cpu")
+
+data = pd.read_parquet('../../data/normalized_training_set.parquet')
+cond_names = list(data.keys()[2:])
+
+
+# Flow = NF_condGLOW(n_layers=8, dim_notcond=2, dim_cond=12).to(device=device)
+# losses = []
+# training_flow(flow = Flow, 
+#               data = data, 
+#               cond_names=cond_names, 
+#               epochs=3, lr=2*10**-5, batch_size=10, 
+#               loss_saver=losses, checkpoint_dir='/export/home/vgiusepp/MW_MH/tests/architecture/checkpoints/checkpoint_data/', gamma=0.998, optimizer_obj=None)
+device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+
+def define_model(trial):
+    #Hyperparameters
+    n_layers = trial.suggest_int("n_layers", 2, 6)
+    n_hidden = trial.suggest_int("n_hidden", 8, 32)
+    n_layers_CL = trial.suggest_int("n_layers_CL", 2, 8)
+    neg_slope = trial.suggest_float("neg_slope", 0.1, 0.5)
+
+    #Create model
+    Flow = NF_condGLOW(n_layers, dim_notcond=2, dim_cond=12, CL=AffineCoupling, network_args=[n_hidden, n_layers_CL, neg_slope])
+
+    return Flow
+
+def objective(trial):
+    #Hyperparameters
+    Flow = define_model(trial).to(device)
+    
+    
+    lr = trial.suggest_float("lr", 10**-5, 10**-2)
+    batch_size = trial.suggest_int("batch_size", 1024, 4096)
+    gamma = trial.suggest_float("gamma", 0.99, 0.999)
+
+
+    losses = []
+    
+    data = pd.read_parquet('../../data/normalized_training_set.parquet')
+
+    #Train model
+    training_flow(Flow, data=data, cond_names=list(data.keys()[2:]), loss_saver=losses, epochs=10, lr=lr, batch_size=batch_size, gamma=gamma)
+
+    #Return loss
+    return np.mean(losses)
+
+study = optuna.create_study(direction="minimize")
+study.optimize(objective, n_trials=100, timeout=600)
