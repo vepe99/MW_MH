@@ -1,17 +1,20 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+
 import time
 import os
 import re
-import numba
+import itertools
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-import itertools
-from tqdm import tqdm
+import torch.autocast as autocast
+import torch.cuda.amp.GradScaler as GradScaler
+
 import optuna
 
 class MLP(nn.Module):
@@ -262,9 +265,6 @@ def training_flow(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs,
     #Device the model is on
     device = flow.parameters().__next__().device
 
-    #Infos to printout
-    n_steps = data.shape[0]*epochs//batch_size+1
-
     #Get index based masks for conditional variables
     mask_cond = np.isin(data.columns.to_list(), cond_names)
     mask_cond = torch.from_numpy(mask_cond).to(device)
@@ -333,21 +333,98 @@ def training_flow(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs,
             #Update learning rate every decrease_step steps
             if ct % decrease_step == 0:
                 lr_schedule.step()
+
+def training_flow_MixedPrecision(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs, lr=2*10**-2, batch_size=1024, loss_saver=None, checkpoint_dir=None, gamma=0.998, optimizer_obj=None):
+    
+    #Device the model is on
+    device = flow.parameters().__next__().device
+
+    #Get index based masks for conditional variables
+    mask_cond = np.isin(data.columns.to_list(), cond_names)
+    mask_cond = torch.from_numpy(mask_cond).to(device)
+    
+    # Convert DataFrame to tensor (index based)
+    data = torch.from_numpy(data.values).type(torch.float)
+
+    data_loader = torch.utils.data.DataLoader(data, batch_size=batch_size, shuffle=True)
+
+    if optimizer_obj is None:
+        optimizer = optim.Adam(flow.parameters(), lr=lr)
+    else:
+        optimizer = optimizer_obj
+    
+    scaler = GrandScaler()
+
+    lr_schedule = torch.optim.lr_scheduler.ExponentialLR(optimizer=optimizer, gamma=gamma)
+
+    #Save losses
+    if loss_saver is None:
+        losses = []
+    else:
+        losses = loss_saver
+
+    #Total number of steps
+    ct = 0
+    #Total number of checkpoints
+    cp = 0
+
+    start_time = time.perf_counter()
+
+    for e in tqdm(range(epochs)):
+        for i, batch in enumerate(data_loader):
+     
+            #Set gradients to zero
+            optimizer.zero_grad()
+            
+            with autocast(device_type='cuda', dtype=torch.float16):
+                x = batch.to(device)
+                #Evaluate model
+                z, logdet, prior_z_logprob = flow(x[..., ~mask_cond], x[..., mask_cond])
+                #Get loss
+                loss = -torch.mean(logdet+prior_z_logprob) 
+                losses.append(loss.item())
+                
+            
+            scaler.scale(loss).backward()
+            #Update parameters
+            scaler.step(optimizer)
+            
+            scaler.update()
+            
+            #Every 5000 steps save model and loss history (checkpoint)
+            if checkpoint_dir != None and ct % 5000 == 0 and not ct == 0:
+                torch.save(flow.state_dict(), f"{checkpoint_dir}checkpoint_{cp%2}.pth")
+                print(f'state dict saved checkpoint_{cp%2}')
+                curr_time = time.perf_counter()
+                np.save(f"{checkpoint_dir}losses_{cp%2}.npy", np.array(loss_saver+[curr_time-start_time]))
+                cp += 1
+        
+            ct += 1
+
+
+            #Decrease learning rate every 10 steps until it is smaller than 3*10**-6, then every 120 steps
+            if lr_schedule.get_last_lr()[0] <= 3*10**-6:
+                decrease_step = 120
+            else:
+                decrease_step = 10
+
+            #Update learning rate every decrease_step steps
+            if ct % decrease_step == 0:
+                lr_schedule.step()
             
 device = torch.device("cuda:9" if torch.cuda.is_available() else "cpu")
 
 data = pd.read_parquet('../../data/normalized_training_set.parquet')
 cond_names = list(data.keys()[2:])
 
-
-# Flow = NF_condGLOW(n_layers=8, dim_notcond=2, dim_cond=12).to(device=device)
-# losses = []
-# training_flow(flow = Flow, 
-#               data = data, 
-#               cond_names=cond_names, 
-#               epochs=3, lr=2*10**-5, batch_size=10, 
-#               loss_saver=losses, checkpoint_dir='/export/home/vgiusepp/MW_MH/tests/architecture/checkpoints/checkpoint_data/', gamma=0.998, optimizer_obj=None)
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:9" if torch.cuda.is_available() else "cpu")
+Flow = NF_condGLOW(n_layers=8, dim_notcond=2, dim_cond=12).to(device=device)
+losses = []
+training_flow_MixedPrecision(flow = Flow, 
+                            data = data, 
+                            cond_names=cond_names, 
+                            epochs=3, lr=2*10**-5, batch_size=10, 
+                            loss_saver=losses, checkpoint_dir='/export/home/vgiusepp/MW_MH/tests/architecture/checkpoints/checkpoint_data/', gamma=0.998, optimizer_obj=None)
 
 def define_model(trial):
     #Hyperparameters
@@ -381,5 +458,5 @@ def objective(trial):
     #Return loss
     return np.mean(losses)
 
-study = optuna.create_study(direction="minimize")
-study.optimize(objective, n_trials=100, timeout=600)
+# study = optuna.create_study(direction="minimize")
+# study.optimize(objective, n_trials=100, timeout=600)
