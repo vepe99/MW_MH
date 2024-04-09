@@ -11,15 +11,15 @@ import os
 import re
 from tqdm.notebook import tqdm
 
-
-all_paths = glob.glob('/mnt/storage/_data/nihao/nihao_classic/g*/0*/*.*.*')
+# change regex
+all_paths = glob.glob('/mnt/storage/_data/nihao/nihao_classic/g?.??e??/g?.??e??.0????')
 # Regular expression to match files that end with 5 numbers and don't have a dot at the end
 
-regex = r'^.*\d{5}$' #all the snapshots
+# regex = r'^.*\d{5}$' #all the snapshots
 
 
-# Filter the list of files
-paths = [path for path in all_paths if re.match(regex, path)]
+# # Filter the list of files
+# paths = [path for path in all_paths if re.match(regex, path)]
 
 
 
@@ -136,3 +136,5 @@ def extract_parameter_array(path='str', path_parameters='str', path_observables=
                 else:
                     print('Not formed stars yet')        
 
+for path in tqdm(all_paths):
+    extract_parameter_array(path, path_parameters='../../data/parameters/', path_observables='../../data/observables/')
