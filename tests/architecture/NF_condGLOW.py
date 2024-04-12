@@ -12,8 +12,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-import torch.autocast as autocast
-import torch.cuda.amp.GradScaler as GradScaler
+from torch import autocast
+from torch.cuda.amp import GradScaler
+from torch.utils.tensorboard import SummaryWriter
 
 import optuna
 
@@ -262,6 +263,8 @@ class NF_condGLOW(nn.Module):
     
 def training_flow(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs, lr=2*10**-2, batch_size=1024, loss_saver=None, checkpoint_dir=None, gamma=0.998, optimizer_obj=None):
     
+    writer = SummaryWriter()
+    
     #Device the model is on
     device = flow.parameters().__next__().device
 
@@ -290,12 +293,12 @@ def training_flow(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs,
 
     #Total number of steps
     ct = 0
-    #Total number of checkpoints
-    cp = 0
 
     start_time = time.perf_counter()
 
+    best_loss = 1_000_000
     for e in tqdm(range(epochs)):
+        running_loss = 0
         for i, batch in enumerate(data_loader):
             x = batch.to(device)
             
@@ -313,16 +316,25 @@ def training_flow(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs,
             #Update parameters
             optimizer.step()
             
-            #Every 5000 steps save model and loss history (checkpoint)
-            if checkpoint_dir != None and ct % 5000 == 0 and not ct == 0:
-                torch.save(flow.state_dict(), f"{checkpoint_dir}checkpoint_{cp%2}.pth")
-                print(f'state dict saved checkpoint_{cp%2}')
-                curr_time = time.perf_counter()
-                np.save(f"{checkpoint_dir}losses_{cp%2}.npy", np.array(loss_saver+[curr_time-start_time]))
-                cp += 1
-        
-            ct += 1
+            # Gather data and report
+            running_loss += loss.item()
 
+            if i % 10 == 9:
+                last_loss = running_loss / 10 # loss per batch
+                print('  batch {} loss: {}'.format(i + 1, last_loss))
+                tb_x = e * len(data_loader) + i + 1
+                writer.add_scalar('Loss/train', last_loss, tb_x)
+                
+                if last_loss < best_loss:
+                    best_loss = last_loss
+                    torch.save(flow.state_dict(), f"{checkpoint_dir}checkpoint_best.pth")
+                    print(f'state dict saved checkpoint_best')
+                    curr_time = time.perf_counter()
+                    np.save(f"{checkpoint_dir}losses_best.npy", np.array(best_loss))
+                    
+                running_loss = 0.
+
+            ct += 1
 
             #Decrease learning rate every 10 steps until it is smaller than 3*10**-6, then every 120 steps
             if lr_schedule.get_last_lr()[0] <= 3*10**-6:
@@ -335,6 +347,8 @@ def training_flow(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs,
                 lr_schedule.step()
 
 def training_flow_MixedPrecision(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs, lr=2*10**-2, batch_size=1024, loss_saver=None, checkpoint_dir=None, gamma=0.998, optimizer_obj=None):
+    
+    writer = SummaryWriter()
     
     #Device the model is on
     device = flow.parameters().__next__().device
@@ -353,7 +367,7 @@ def training_flow_MixedPrecision(flow:NF_condGLOW, data:pd.DataFrame, cond_names
     else:
         optimizer = optimizer_obj
     
-    scaler = GrandScaler()
+    scaler = GradScaler()
 
     lr_schedule = torch.optim.lr_scheduler.ExponentialLR(optimizer=optimizer, gamma=gamma)
 
@@ -365,12 +379,12 @@ def training_flow_MixedPrecision(flow:NF_condGLOW, data:pd.DataFrame, cond_names
 
     #Total number of steps
     ct = 0
-    #Total number of checkpoints
-    cp = 0
 
     start_time = time.perf_counter()
 
+    best_loss = 1_000_000
     for e in tqdm(range(epochs)):
+        running_loss = 0
         for i, batch in enumerate(data_loader):
      
             #Set gradients to zero
@@ -388,19 +402,27 @@ def training_flow_MixedPrecision(flow:NF_condGLOW, data:pd.DataFrame, cond_names
             scaler.scale(loss).backward()
             #Update parameters
             scaler.step(optimizer)
-            
             scaler.update()
             
-            #Every 5000 steps save model and loss history (checkpoint)
-            if checkpoint_dir != None and ct % 5000 == 0 and not ct == 0:
-                torch.save(flow.state_dict(), f"{checkpoint_dir}checkpoint_{cp%2}.pth")
-                print(f'state dict saved checkpoint_{cp%2}')
-                curr_time = time.perf_counter()
-                np.save(f"{checkpoint_dir}losses_{cp%2}.npy", np.array(loss_saver+[curr_time-start_time]))
-                cp += 1
+             # Gather data and report
+            running_loss += loss.item()
+
+            if i % 10 == 9:
+                last_loss = running_loss / 10 # loss per batch
+                print('  batch {} loss: {}'.format(i + 1, last_loss))
+                tb_x = e * len(data_loader) + i + 1
+                writer.add_scalar('Loss/train', last_loss, tb_x)
+                
+                if last_loss < best_loss:
+                    best_loss = last_loss
+                    torch.save(flow.state_dict(), f"{checkpoint_dir}checkpoint_best.pth")
+                    print(f'state dict saved checkpoint_best')
+                    curr_time = time.perf_counter()
+                    np.save(f"{checkpoint_dir}losses_best.npy", np.array(best_loss))
+                    
+                running_loss = 0.
         
             ct += 1
-
 
             #Decrease learning rate every 10 steps until it is smaller than 3*10**-6, then every 120 steps
             if lr_schedule.get_last_lr()[0] <= 3*10**-6:
@@ -411,52 +433,53 @@ def training_flow_MixedPrecision(flow:NF_condGLOW, data:pd.DataFrame, cond_names
             #Update learning rate every decrease_step steps
             if ct % decrease_step == 0:
                 lr_schedule.step()
+                
+######code to run for training the model#########
             
-device = torch.device("cuda:9" if torch.cuda.is_available() else "cpu")
 
 data = pd.read_parquet('../../data/normalized_training_set.parquet')
 cond_names = list(data.keys()[2:])
 
 device = torch.device("cuda:9" if torch.cuda.is_available() else "cpu")
-Flow = NF_condGLOW(n_layers=8, dim_notcond=2, dim_cond=12).to(device=device)
+Flow = NF_condGLOW(n_layers=2, dim_notcond=2, dim_cond=12).to(device=device)
 losses = []
 training_flow_MixedPrecision(flow = Flow, 
-                            data = data, 
-                            cond_names=cond_names, 
-                            epochs=3, lr=2*10**-5, batch_size=10, 
-                            loss_saver=losses, checkpoint_dir='/export/home/vgiusepp/MW_MH/tests/architecture/checkpoints/checkpoint_data/', gamma=0.998, optimizer_obj=None)
+                data = data.head(10_000_000), 
+                cond_names=cond_names, 
+                epochs=10, lr=2*10**-5, batch_size=1024, 
+                loss_saver=losses, checkpoint_dir='/export/home/vgiusepp/MW_MH/tests/architecture/checkpoints/checkpoint_data/', gamma=0.998, optimizer_obj=None)
 
-def define_model(trial):
-    #Hyperparameters
-    n_layers = trial.suggest_int("n_layers", 2, 6)
-    n_hidden = trial.suggest_int("n_hidden", 8, 32)
-    n_layers_CL = trial.suggest_int("n_layers_CL", 2, 8)
-    neg_slope = trial.suggest_float("neg_slope", 0.1, 0.5)
+# def define_model(trial):
+#     #Hyperparameters
+#     n_layers = trial.suggest_int("n_layers", 2, 6)
+#     n_hidden = trial.suggest_int("n_hidden", 8, 32)
+#     n_layers_CL = trial.suggest_int("n_layers_CL", 2, 8)
+#     neg_slope = trial.suggest_float("neg_slope", 0.1, 0.5)
 
-    #Create model
-    Flow = NF_condGLOW(n_layers, dim_notcond=2, dim_cond=12, CL=AffineCoupling, network_args=[n_hidden, n_layers_CL, neg_slope])
+#     #Create model
+#     Flow = NF_condGLOW(n_layers, dim_notcond=2, dim_cond=12, CL=AffineCoupling, network_args=[n_hidden, n_layers_CL, neg_slope])
 
-    return Flow
+#     return Flow
 
-def objective(trial):
-    #Hyperparameters
-    Flow = define_model(trial).to(device)
+# def objective(trial):
+#     #Hyperparameters
+#     Flow = define_model(trial).to(device)
     
     
-    lr = trial.suggest_float("lr", 10**-5, 10**-2)
-    batch_size = trial.suggest_int("batch_size", 1024, 4096)
-    gamma = trial.suggest_float("gamma", 0.99, 0.999)
+#     lr = trial.suggest_float("lr", 10**-5, 10**-2)
+#     batch_size = trial.suggest_int("batch_size", 1024, 4096)
+#     gamma = trial.suggest_float("gamma", 0.99, 0.999)
 
 
-    losses = []
+#     losses = []
     
-    data = pd.read_parquet('../../data/normalized_training_set.parquet')
+#     data = pd.read_parquet('../../data/normalized_training_set.parquet')
 
-    #Train model
-    training_flow(Flow, data=data, cond_names=list(data.keys()[2:]), loss_saver=losses, epochs=10, lr=lr, batch_size=batch_size, gamma=gamma)
+#     #Train model
+#     training_flow(Flow, data=data, cond_names=list(data.keys()[2:]), loss_saver=losses, epochs=10, lr=lr, batch_size=batch_size, gamma=gamma)
 
-    #Return loss
-    return np.mean(losses)
+#     #Return loss
+#     return np.mean(losses)
 
 # study = optuna.create_study(direction="minimize")
 # study.optimize(objective, n_trials=100, timeout=600)
