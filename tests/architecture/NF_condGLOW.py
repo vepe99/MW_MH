@@ -143,9 +143,10 @@ class AffineCoupling(nn.Module):
         x_condition.float()
         x_a, x_b = x.chunk(2, dim=1)
         log_s, t = (self.net_notcond(x_b) * self.net_cond(x_condition)).chunk(2, dim=1)
-        # s = torch.exp(log_s)
-        s = F.sigmoid(log_s)
-        y_a = s * x_a + t
+        log_s = 0.636*1.9*torch.atan(log_s/1.9)
+        s = torch.exp(log_s)
+        # s = F.sigmoid(log_s)
+        y_a = (s * x_a) + t
         y_b = x_b
 
         logdet = torch.sum(torch.log(s))
@@ -168,14 +169,301 @@ class AffineCoupling(nn.Module):
         x_condition.float()
         y_a, y_b = y.chunk(2, dim=1)
         log_s, t = (self.net_notcond(y_b) * self.net_cond(x_condition)).chunk(2, dim=1)
-        # s = torch.exp(log_s)
-        s = F.sigmoid(log_s)
-        x_a = (y_a - t) / s
+        log_s = 0.636*1.9*torch.atan(log_s/1.9)
+        s = torch.exp(log_s)
+        # s = F.sigmoid(log_s)
+        x_a = (y_a - t)/s 
         x_b = y_b
 
         logdet = torch.sum(torch.log(s))
 
         return torch.cat([x_a, x_b], dim=1), logdet
+    
+    
+def find_bin(values, bin_boarders):
+    #Make sure that a value=uppermost boarder is in last bin not last+1
+    bin_boarders[..., -1] += 10**-6
+    return torch.sum((values.unsqueeze(-1)>=bin_boarders),dim=-1)-1
+
+#Takes a parametrisation of RQS and points and evaluates RQS or inverse
+#Splines from [-B,B] identity else
+#Bin widths normalized for 2B interval size
+def eval_RQS(X, RQS_bin_widths, RQS_bin_heights, RQS_knot_derivs, RQS_B, inverse=False):
+    """
+    Function to evaluate points inside [-B,B] with RQS splines, given by the parameters.
+    See https://arxiv.org/abs/1906.04032
+    """
+    #Get boarders of bins as cummulative sum
+    #As they are normalized this goes up to 2B
+    #Represents upper boarders
+    bin_boardersx = torch.cumsum(RQS_bin_widths, dim=-1)
+
+    #We shift so that they cover actual interval [-B,B]
+    bin_boardersx -= RQS_B
+
+    #Now make sure we include all boarders i.e. include lower boarder B
+    #Also for bin determination make sure upper boarder is actually B and
+    #doesn't suffer from rounding (order 10**-7, searching algorithm would anyways catch this)
+    bin_boardersx = F.pad(bin_boardersx, (1,0), value=-RQS_B)
+    bin_boardersx[...,-1] = RQS_B
+
+
+    #Same for heights
+    bin_boardersy = torch.cumsum(RQS_bin_heights, dim=-1)
+    bin_boardersy -= RQS_B
+    bin_boardersy = F.pad(bin_boardersy, (1,0), value=-RQS_B)
+    bin_boardersy[...,-1] = RQS_B
+    
+    
+    #Now with completed parametrisation (knots+derivatives) we can evaluate the splines
+    #For this find bin positions first
+    bin_nr = find_bin(X, bin_boardersy if inverse else bin_boardersx)
+    
+    #After we know bin number we need to get corresponding knot points and derivatives for each X
+    x_knot_k = bin_boardersx.gather(-1, bin_nr.unsqueeze(-1)).squeeze(-1)
+    x_knot_kplus1 = bin_boardersx.gather(-1, (bin_nr+1).unsqueeze(-1)).squeeze(-1)
+    
+    y_knot_k = bin_boardersy.gather(-1, bin_nr.unsqueeze(-1)).squeeze(-1)
+    y_knot_kplus1 = bin_boardersy.gather(-1, (bin_nr+1).unsqueeze(-1)).squeeze(-1)
+    
+    delta_knot_k = RQS_knot_derivs.gather(-1, bin_nr.unsqueeze(-1)).squeeze(-1)
+    delta_knot_kplus1 = RQS_knot_derivs.gather(-1, (bin_nr+1).unsqueeze(-1)).squeeze(-1)
+    
+
+    #Evaluate splines, as shown in NSF paper
+    s_knot_k = (y_knot_kplus1-y_knot_k)/(x_knot_kplus1-x_knot_k)
+    if inverse:
+        a = (y_knot_kplus1-y_knot_k)*(s_knot_k-delta_knot_k)+(X-y_knot_k)*(delta_knot_kplus1+delta_knot_k-2*s_knot_k)
+        b = (y_knot_kplus1-y_knot_k)*delta_knot_k-(X-y_knot_k)*(delta_knot_kplus1+delta_knot_k-2*s_knot_k)
+        c = -s_knot_k*(X-y_knot_k)
+        
+        Xi = 2*c/(-b-torch.sqrt(b**2-4*a*c))
+        Y = Xi*(x_knot_kplus1-x_knot_k)+x_knot_k
+        
+        dY_dX = (s_knot_k**2*(delta_knot_kplus1*Xi**2+2*s_knot_k*Xi*(1-Xi)+delta_knot_k*(1-Xi)**2))/(s_knot_k+(delta_knot_kplus1+delta_knot_k-2*s_knot_k)*Xi*(1-Xi))**2
+        #No sum yet, so we can later keep track which X weren't in the intervall and need logdet 0
+        logdet = -torch.log(dY_dX)
+
+    else:
+        Xi = (X-x_knot_k)/(x_knot_kplus1-x_knot_k)
+        Y = y_knot_k+((y_knot_kplus1-y_knot_k)*(s_knot_k*Xi**2+delta_knot_k*Xi*(1-Xi)))/(s_knot_k+(delta_knot_kplus1+delta_knot_k-2*s_knot_k)*Xi*(1-Xi))
+        dY_dX = (s_knot_k**2*(delta_knot_kplus1*Xi**2+2*s_knot_k*Xi*(1-Xi)+delta_knot_k*(1-Xi)**2))/(s_knot_k+(delta_knot_kplus1+delta_knot_k-2*s_knot_k)*Xi*(1-Xi))**2
+        logdet = torch.log(dY_dX)
+
+    return Y, logdet
+
+
+def RQS_global(X, RQS_bin_widths, RQS_bin_heights, RQS_knot_derivs, RQS_B, inverse=False):
+    """Evaluates RQS spline, as given by parameters, inside [-B,B] and identity outside. Uses eval_RQS."""
+    inside_interval = (X<=RQS_B) & (X>=-RQS_B)
+
+    Y = torch.zeros_like(X)
+    logdet = torch.zeros_like(X)
+    
+    Y[inside_interval], logdet[inside_interval] = eval_RQS(X[inside_interval], RQS_bin_widths[inside_interval,:], RQS_bin_heights[inside_interval,:], RQS_knot_derivs[inside_interval,:], RQS_B, inverse)
+    Y[~inside_interval] = X[~inside_interval]
+    logdet[~inside_interval] = 0
+    
+    #Now sum the logdet, zeros will be in the right places where e.g. all X components were 0
+    logdet = torch.sum(logdet, dim=1)
+    
+    return Y, logdet
+
+
+class NSF_CL(nn.Module):
+    """Neural spline flow coupling layer. See https://arxiv.org/abs/1906.04032 for details.
+    
+    Implements the forward and backward transformation."""
+    def __init__(self, dim_notcond, dim_cond, split=0.5, K=8, B=3, network = MLP, network_args=(16,4,0.2)):
+        """
+        Constructs a Neural spline flow coupling layer.
+
+        Parameters
+        ----------
+
+        dim_notcond : int
+            The dimension of the input, i.e. the dimension of the data that will be transformed.
+        dim_cond : int
+            The dimension of the condition. If 0, the coupling layer is not conditioned.
+        split : float, default: 0.5
+            The fraction of the input that will be transformed. The rest will be left unchanged. The default is 0.5.
+        K : int, default: 8
+            The number of bins used for the spline.
+        B : float, default: 3
+            The interval size of the spline.
+        network : nn.Module, default: MLP
+            The neural network used to determine the parameters of the spline.
+        network_args : tuple, default: (16,4,0.2)
+            The arguments for the neural network.
+        """
+        super().__init__()
+        self.dim = dim_notcond
+        self.dim_cond = dim_cond
+        self.K = K
+        self.B = B
+        
+        self.split1 = int(self.dim*split)
+        self.split2 = self.dim-self.split1
+        
+        self.net = network(self.split1, (3*self.K-1)*self.split2, *network_args)
+        
+        #Decide if conditioned or not
+        if self.dim_cond>0:
+            self.net_cond = network(dim_cond, (3*self.K-1)*self.split2, *network_args)
+            
+        
+    def forward(self, x, x_cond):
+        #Divide input into unchanged and transformed part
+        unchanged, transform = x[..., :self.split1], x[..., self.split1:]
+
+        #Get parameters from neural network based on unchanged part and condition
+        if self.dim_cond>0:
+            thetas = (self.net_cond(x_cond)*self.net(unchanged)).reshape(-1, self.split2, 3*self.K-1)
+        else:
+            thetas = self.net(unchanged).reshape(-1, self.split2, 3*self.K-1)
+        
+        #Normalize NN outputs to get widths, heights and derivatives
+        widths, heights, derivs = torch.split(thetas, self.K, dim=-1)
+        widths = F.softmax(widths, dim=-1)*2*self.B
+        heights = F.softmax(heights, dim=-1)*2*self.B
+        derivs = F.softplus(derivs)
+        derivs = F.pad(derivs, pad=(1,1), value=1)
+        
+        #Evaluate splines
+        transform, logdet = RQS_global(transform, widths, heights, derivs, self.B)
+
+        return torch.hstack((unchanged,transform)), logdet
+    
+    def backward(self, x, x_cond):
+        unchanged, transform = x[..., :self.split1], x[..., self.split1:]
+        
+        if self.dim_cond>0:
+            thetas = (self.net_cond(x_cond)*self.net(unchanged)).reshape(-1, self.split2, 3*self.K-1)
+        else:
+            thetas = self.net(unchanged).reshape(-1, self.split2, 3*self.K-1)
+        
+        widths, heights, derivs = torch.split(thetas, self.K, dim=-1)
+        widths = F.softmax(widths, dim=-1)*2*self.B
+        heights = F.softmax(heights, dim=-1)*2*self.B
+        derivs = F.softplus(derivs)
+        derivs = F.pad(derivs, pad=(1,1), value=1)
+        
+        transform, logdet = RQS_global(transform, widths, heights, derivs, self.B, inverse=True)
+        
+        return torch.hstack((unchanged,transform)), logdet
+    
+    
+class NSF_CL2(nn.Module):
+    """Neural spline flow double coupling layer. First transforms the first half of the input, then the second half.
+    Works only for even dimensions.
+    
+    Implements the forward and backward transformation."""
+    def __init__(self, dim_notcond, dim_cond, K=8, B=3, network = MLP, network_args=(16,4,0.2)):
+        """
+        Constructs a Neural spline flow double coupling layer.
+
+        Parameters
+        ----------
+
+        dim_notcond : int
+            The dimension of the input, i.e. the dimension of the data that will be transformed.
+        dim_cond : int
+            The dimension of the condition. If 0, the coupling layer is not conditioned.
+        K : int, default: 8
+            The number of bins used for the spline.
+        B : float, default: 3
+            The interval size of the spline.
+        network : nn.Module, default: MLP
+            The neural network used to determine the parameters of the spline.
+        network_args : tuple, default: (16,4,0.2)
+            The arguments for the neural network.
+        """
+        super().__init__()
+        self.dim = dim_notcond
+        self.dim_cond = dim_cond
+        self.K = K
+        self.B = B
+        
+        self.split = self.dim//2
+        
+        #Works only for even
+        self.net1 = network(self.split, (3*self.K-1)*self.split, *network_args)
+        self.net2 = network(self.split, (3*self.K-1)*self.split, *network_args)
+        
+        if dim_cond>0:
+            self.net_cond1 = network(dim_cond, (3*self.K-1)*self.split, *network_args)
+            self.net_cond2 = network(dim_cond, (3*self.K-1)*self.split, *network_args)
+        
+    def forward(self, x, x_cond):
+        #Divide input into first and second half
+        first, second = x[..., self.split:], x[..., :self.split]
+        
+        #Get parameters from neural network based on unchanged part and condition
+        if self.dim_cond>0:
+            thetas = (self.net_cond1(x_cond)*self.net1(second)).reshape(-1, self.split, 3*self.K-1)
+        else:
+            thetas = self.net1(second).reshape(-1, self.split, 3*self.K-1)
+        
+        #Normalize NN outputs to get widths, heights and derivatives
+        widths, heights, derivs = torch.split(thetas, self.K, dim=-1)
+        widths = F.softmax(widths, dim=-1)*2*self.B
+        heights = F.softmax(heights, dim=-1)*2*self.B
+        derivs = F.softplus(derivs)
+        derivs = F.pad(derivs, pad=(1,1), value=1)
+        
+        #Evaluate splines
+        first, logdet = RQS_global(first, widths, heights, derivs, self.B)
+        
+        #Repeat for second half
+        if self.dim_cond>0:
+            thetas = (self.net_cond2(x_cond)*self.net2(first)).reshape(-1, self.split, 3*self.K-1)
+        else:
+            thetas = self.net2(first).reshape(-1, self.split, 3*self.K-1)
+        widths, heights, derivs = torch.split(thetas, self.K, dim=-1)
+        widths = F.softmax(widths, dim=-1)*2*self.B
+        heights = F.softmax(heights, dim=-1)*2*self.B
+        derivs = F.softplus(derivs)
+        derivs = F.pad(derivs, pad=(1,1), value=1)
+        
+        second, logdet_temp = RQS_global(second, widths, heights, derivs, self.B)
+            
+        logdet += logdet_temp
+            
+        return torch.hstack((second,first)), logdet
+        
+    def backward(self, x, x_cond):
+        first, second = x[..., self.split:], x[..., :self.split]
+        
+        if self.dim_cond>0:
+            thetas = (self.net_cond2(x_cond)*self.net2(first)).reshape(-1, self.split, 3*self.K-1)
+        else:
+            thetas = self.net2(first).reshape(-1, self.split, 3*self.K-1)
+        
+        widths, heights, derivs = torch.split(thetas, self.K, dim=-1)
+        widths = F.softmax(widths, dim=-1)*2*self.B
+        heights = F.softmax(heights, dim=-1)*2*self.B
+        derivs = F.softplus(derivs)
+        derivs = F.pad(derivs, pad=(1,1), value=1)
+            
+        second, logdet = RQS_global(second, widths, heights, derivs, self.B, inverse=True)
+        
+        if self.dim_cond>0:
+            thetas = (self.net_cond1(x_cond)*self.net1(second)).reshape(-1, self.split, 3*self.K-1)
+        else:
+            thetas = self.net1(second).reshape(-1, self.split, 3*self.K-1)
+        
+        widths, heights, derivs = torch.split(thetas, self.K, dim=-1)
+        widths = F.softmax(widths, dim=-1)*2*self.B
+        heights = F.softmax(heights, dim=-1)*2*self.B
+        derivs = F.softplus(derivs)
+        derivs = F.pad(derivs, pad=(1,1), value=1)
+            
+        first, logdet_temp = RQS_global(first, widths, heights, derivs, self.B, inverse=True)
+            
+        logdet += logdet_temp
+            
+        return torch.hstack((second,first)), logdet
+
 
 class NF_condGLOW(nn.Module):
     """Normalizing flow GLOW model with Affine coupling layers. Alternates coupling layers with GLOW convolutions Combines coupling layers and convolution layers."""
@@ -249,13 +537,25 @@ class NF_condGLOW(nn.Module):
         x_cond : torch.Tensor
             The condition for the samples. If dim_cond=0 enter torch.Tensor([]).
         """
-        return self.backward( self.prior.sample(torch.Size((number,))), torch.from_numpy(x_cond).to(device) )[0]
+        # return self.backward( self.prior.sample(torch.Size((number,))), torch.from_numpy(x_cond).to(self.device) )[0]
+        samples = self.backward( self.prior.sample(torch.Size((number,))), torch.from_numpy(x_cond).to(self.device) )[0]
+        feh_mean, feh_std = torch.from_numpy(np.load('../../data/preprocessing/mean_std_of_feh.npz')['mean']).to(self.device), torch.from_numpy(np.load('../../data/preprocessing/mean_std_of_feh.npz')['std']).to(self.device)
+        ofe_mean, ofe_std = torch.from_numpy(np.load('../../data/preprocessing/mean_std_of_ofe.npz')['mean']).to(self.device), torch.from_numpy(np.load('../../data/preprocessing/mean_std_of_ofe.npz')['std']).to(self.device)
+        
+        samples[:, 0] = samples[:, 0]*feh_std + feh_mean
+        samples[:, 1] = samples[:, 1]*ofe_std + ofe_mean
+        
+        return samples
     
     def to(self, device):
         #Modified to also move the prior to the right device
+        self.device = device
         super().to(device)
         self.prior = torch.distributions.Normal(torch.zeros(self.dim_notcond).to(device), torch.ones(self.dim_notcond).to(device))
         return self
+    
+    
+    
     
 def training_flow(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs, lr=2*10**-2, batch_size=1024, loss_saver=None, checkpoint_dir=None, gamma=0.998, optimizer_obj=None):
     
@@ -319,14 +619,14 @@ def training_flow(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs,
 
             if i % 10 == 9:
                 last_loss = running_loss / 10 # loss per batch
-                print('  batch {} loss: {}'.format(i + 1, last_loss))
+                # print('  batch {} loss: {}'.format(i + 1, last_loss))
                 tb_x = e * len(data_loader) + i + 1
                 writer.add_scalar('Loss/train', last_loss, tb_x)
                 
                 if last_loss < best_loss:
                     best_loss = last_loss
                     torch.save(flow.state_dict(), f"{checkpoint_dir}checkpoint_best.pth")
-                    print(f'state dict saved checkpoint_best')
+                    # print(f'state dict saved checkpoint_best')
                     curr_time = time.perf_counter()
                     np.save(f"{checkpoint_dir}losses_best.npy", np.array(best_loss))
                     
@@ -436,18 +736,21 @@ def training_flow_MixedPrecision(flow:NF_condGLOW, data:pd.DataFrame, cond_names
             
 
 # data = pd.read_parquet('/export/home/vgiusepp/MW_MH/data/preprocessing/preprocess_training_set.parquet')
-data = pd.read_parquet('../../data/preprocessing/TEST.parquet')
-cond_names = list(data.keys()[2:-1])
+# data = pd.read_parquet('../../data/preprocessing/TEST.parquet')
+# cond_names = list(data.keys()[2:-1])
 
-device = torch.device("cuda:9" if torch.cuda.is_available() else "cpu")
-Flow = NF_condGLOW(n_layers=3, dim_notcond=2, dim_cond=12).to(device=device)
-losses = []
-training_flow(flow = Flow, 
-                data = data.head(), 
-                cond_names=cond_names, 
-                epochs=3, lr=2*10**-6, batch_size=10, 
-                loss_saver=losses, checkpoint_dir='/export/home/vgiusepp/MW_MH/tests/architecture/checkpoints/checkpoint_data/', gamma=0.998, optimizer_obj=None)
+# device = torch.device("cuda:9" if torch.cuda.is_available() else "cpu")
+# Flow = NF_condGLOW(n_layers=3, dim_notcond=2, dim_cond=12).to(device=device)
+# losses = []
+# training_flow(flow = Flow, 
+#                 data = data.head(1000), 
+#                 cond_names=cond_names, 
+#                 epochs=3, lr=2*10**-6, batch_size=10, 
+#                 loss_saver=losses, checkpoint_dir='/export/home/vgiusepp/MW_MH/tests/architecture/checkpoints/checkpoint_data/', gamma=0.998, optimizer_obj=None)
 
+
+
+#####################OPTUNA##################################
 # def define_model(trial):
 #     #Hyperparameters
 #     n_layers = trial.suggest_int("n_layers", 2, 6)
