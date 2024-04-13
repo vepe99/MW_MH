@@ -437,16 +437,16 @@ def training_flow_MixedPrecision(flow:NF_condGLOW, data:pd.DataFrame, cond_names
 ######code to run for training the model#########
             
 
-data = pd.read_parquet('../../data/normalized_training_set.parquet')
+data = pd.read_parquet('/export/home/vgiusepp/MW_MH/data/preprocessing/preprocess_training_set.parquet')
 cond_names = list(data.keys()[2:])
 
 device = torch.device("cuda:9" if torch.cuda.is_available() else "cpu")
-Flow = NF_condGLOW(n_layers=2, dim_notcond=2, dim_cond=12).to(device=device)
+Flow = NF_condGLOW(n_layers=3, dim_notcond=2, dim_cond=12).to(device=device)
 losses = []
-training_flow_MixedPrecision(flow = Flow, 
-                data = data.head(10_000_000), 
+training_flow(flow = Flow, 
+                data = data, 
                 cond_names=cond_names, 
-                epochs=10, lr=2*10**-5, batch_size=1024, 
+                epochs=3, lr=2*10**-5, batch_size=1024, 
                 loss_saver=losses, checkpoint_dir='/export/home/vgiusepp/MW_MH/tests/architecture/checkpoints/checkpoint_data/', gamma=0.998, optimizer_obj=None)
 
 # def define_model(trial):
