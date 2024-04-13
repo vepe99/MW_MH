@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 import pandas as pd
 
 import time
@@ -52,13 +53,8 @@ class MLP(nn.Module):
         # self.network.apply(init_weights)
     
     def forward(self, x):
-        x.float()
-        return self.network(x)
+        return self.network(x.float())
 
-    # def init_weights(m):
-    #     if isinstance(m, nn.Linear):
-    #         torch.nn.kaiming_uniform_(m.weight, a=0, mode='fan_out', nonlinearity='leaky_relu', generator=None)
-    #         m.bias.data.fill_(0.01)
     
 class GLOW_conv(nn.Module):
     def __init__(self, n_dim) -> None:
@@ -253,7 +249,7 @@ class NF_condGLOW(nn.Module):
         x_cond : torch.Tensor
             The condition for the samples. If dim_cond=0 enter torch.Tensor([]).
         """
-        return self.backward( self.prior.sample(torch.Size((number,))), x_cond )[0]
+        return self.backward( self.prior.sample(torch.Size((number,))), torch.from_numpy(x_cond).to(device) )[0]
     
     def to(self, device):
         #Modified to also move the prior to the right device
@@ -444,9 +440,9 @@ device = torch.device("cuda:9" if torch.cuda.is_available() else "cpu")
 Flow = NF_condGLOW(n_layers=3, dim_notcond=2, dim_cond=12).to(device=device)
 losses = []
 training_flow(flow = Flow, 
-                data = data, 
+                data = data.head(10000), 
                 cond_names=cond_names, 
-                epochs=3, lr=2*10**-5, batch_size=1024, 
+                epochs=3, lr=2*10**-6, batch_size=1024, 
                 loss_saver=losses, checkpoint_dir='/export/home/vgiusepp/MW_MH/tests/architecture/checkpoints/checkpoint_data/', gamma=0.998, optimizer_obj=None)
 
 # def define_model(trial):
