@@ -264,6 +264,8 @@ def training_flow(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs,
     #Device the model is on
     device = flow.parameters().__next__().device
 
+    data = data[data.columns.difference(['Galaxy_name'])]
+
     #Get index based masks for conditional variables
     mask_cond = np.isin(data.columns.to_list(), cond_names)
     mask_cond = torch.from_numpy(mask_cond).to(device)
@@ -433,16 +435,17 @@ def training_flow_MixedPrecision(flow:NF_condGLOW, data:pd.DataFrame, cond_names
 ######code to run for training the model#########
             
 
-data = pd.read_parquet('/export/home/vgiusepp/MW_MH/data/preprocessing/preprocess_training_set.parquet')
-cond_names = list(data.keys()[2:])
+# data = pd.read_parquet('/export/home/vgiusepp/MW_MH/data/preprocessing/preprocess_training_set.parquet')
+data = pd.read_parquet('../../data/preprocessing/TEST.parquet')
+cond_names = list(data.keys()[2:-1])
 
 device = torch.device("cuda:9" if torch.cuda.is_available() else "cpu")
 Flow = NF_condGLOW(n_layers=3, dim_notcond=2, dim_cond=12).to(device=device)
 losses = []
 training_flow(flow = Flow, 
-                data = data.head(10000), 
+                data = data.head(), 
                 cond_names=cond_names, 
-                epochs=3, lr=2*10**-6, batch_size=1024, 
+                epochs=3, lr=2*10**-6, batch_size=10, 
                 loss_saver=losses, checkpoint_dir='/export/home/vgiusepp/MW_MH/tests/architecture/checkpoints/checkpoint_data/', gamma=0.998, optimizer_obj=None)
 
 # def define_model(trial):

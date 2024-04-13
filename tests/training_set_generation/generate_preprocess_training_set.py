@@ -22,9 +22,9 @@ def normalize(df):
 
 def load_data(observables_paths, mass_cut=6*1e9, n_star_percentile=10, feh_percentile=0.1, ofe_percentile=0.1):
     
-    min_n_star = np.percentile(np.load('/mnt/storage/giuseppe_data/MW_MH/data/preprocessing/Number_Star.npy'), n_star_percentile)
-    min_feh    = np.percentile(np.load('/mnt/storage/giuseppe_data/MW_MH/data/preprocessing/FeH.npy'), feh_percentile)
-    min_ofe    = np.percentile(np.load('/mnt/storage/giuseppe_data/MW_MH/data/preprocessing/OFe.npy'), ofe_percentile)  
+    min_n_star = np.percentile(np.load('../../data/preprocessing/Number_Star.npy'), n_star_percentile)
+    min_feh    = np.percentile(np.load('../../data/preprocessing/FeH.npy'), feh_percentile)
+    min_ofe    = np.percentile(np.load('../../data/preprocessing/OFe.npy'), ofe_percentile)  
     
     len_array = 0
     for observables_path in observables_paths:
@@ -34,7 +34,7 @@ def load_data(observables_paths, mass_cut=6*1e9, n_star_percentile=10, feh_perce
         len_array += len(feh)
 
     name_columns_observables = [i for i in np.load(observables_paths[0]).keys()]
-    name_coumns_parameters = [i for i in np.load(observables_paths[0].replace('observables', 'parameters')).keys()][:-2]
+    name_coumns_parameters = [i.replace('mass', 'log10mass') for i in np.load(observables_paths[0].replace('observables', 'parameters')).keys()][:-2]
     name_columns_mean_std = ['mean_metallicity', 'mean_FeMassFrac', 'mean_OMassFrac', 'std_metallicity', 'std_FeMassFrac', 'std_OMassFrac']
     components = name_columns_observables + name_coumns_parameters + name_columns_mean_std  
 
@@ -51,9 +51,9 @@ def load_data(observables_paths, mass_cut=6*1e9, n_star_percentile=10, feh_perce
                 data[:, 0] = observables['feh']
                 data[:, 1] = observables['ofe']
                 ones = np.ones(l)
-                data[:, 2] = parameters['star_mass']*ones
-                data[:, 3] = parameters['gas_mass']*ones
-                data[:, 4] = parameters['dm_mass']*ones
+                data[:, 2] = np.log10(parameters['star_mass'])*ones
+                data[:, 3] = np.log10(parameters['gas_mass'])*ones
+                data[:, 4] = np.log10(parameters['dm_mass'])*ones
                 data[:, 5] = parameters['infall_time']*ones
                 data[:, 6] = parameters['redshift']*ones
                 data[:, 7] = parameters['a']*ones
@@ -68,16 +68,20 @@ def load_data(observables_paths, mass_cut=6*1e9, n_star_percentile=10, feh_perce
                 df_temp = df_temp[(df_temp['feh'] > min_feh) & (df_temp['ofe'] > min_ofe)]
                 df = pd.concat([df, df_temp], ignore_index=True)
                 df.reset_index()
+                df['Galaxy_name'] = observables_path.replace('../../data/observables/', '').replace('_observables.npz', '')
                 print(i)
                 
-    for i in df.columns:
+    for i in df.columns[:-1]:
         mean_i = df[i].mean()
         std_i = df[i].std()
+        print(std_i)
         np.savez(file='../../data/preprocessing/mean_std_of_'+i, mean=mean_i, std=std_i)
-        
-    df = normalize(df)
-    df.to_parquet('../../data/preprocessing/preprocess_training_set.parquet')   
     
-
+    bad_column = 'Galaxy_name'
+    other_cols = df.columns.difference([bad_column])    
+    df[other_cols] = normalize(df[other_cols]) #nomalization must be then reverted during inference to get the correct results
+    df.to_parquet('../../data/preprocessing/preprocess_training_set_Galaxy_name.parquet')   
+    # df.to_parquet('../../data/preprocessing/TEST.parquet')
+    
 load_data(path_2observables)
 
