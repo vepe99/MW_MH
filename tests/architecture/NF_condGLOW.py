@@ -17,6 +17,7 @@ from torch import autocast
 from torch.cuda.amp import GradScaler
 from torch.utils.tensorboard import SummaryWriter
 
+from sklearn.model_selection import train_test_split 
 import optuna
 
 class MLP(nn.Module):
@@ -573,8 +574,10 @@ def training_flow(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs,
 
     # Convert DataFrame to tensor (index based)
     data = torch.from_numpy(data.values).type(torch.float)
+    train_index, val_index = train_test_split(np.arange(data.shape[0]), test_size=0.2, random_state=42)
 
-    data_loader = torch.utils.data.DataLoader(data, batch_size=batch_size, shuffle=True)
+    train_loader = torch.utils.data.DataLoader(data[train_index], batch_size=batch_size, shuffle=True)
+    val_loader = torch.utils.data.DataLoader(data[val_index], batch_size=batch_size, shuffle=True)
 
     if optimizer_obj is None:
         optimizer = optim.Adam(flow.parameters(), lr=lr)
@@ -597,7 +600,8 @@ def training_flow(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs,
     best_loss = 1_000_000
     for e in tqdm(range(epochs)):
         running_loss = 0
-        for i, batch in enumerate(data_loader):
+        val_running_loss = 0
+        for i, batch in enumerate(train_loader):
             x = batch.to(device)
             
             #Evaluate model
@@ -620,20 +624,11 @@ def training_flow(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs,
             if i % 10 == 9:
                 last_loss = running_loss / 10 # loss per batch
                 # print('  batch {} loss: {}'.format(i + 1, last_loss))
-                tb_x = e * len(data_loader) + i + 1
-                writer.add_scalar('Loss/train', last_loss, tb_x)
-                
-                if last_loss < best_loss:
-                    best_loss = last_loss
-                    torch.save(flow.state_dict(), f"{checkpoint_dir}checkpoint_best.pth")
-                    # print(f'state dict saved checkpoint_best')
-                    curr_time = time.perf_counter()
-                    np.save(f"{checkpoint_dir}losses_best.npy", np.array(best_loss))
-                    
+                tb_x = e * len(train_loader) + i + 1
+                writer.add_scalar('Loss/train', last_loss, tb_x)    
                 running_loss = 0.
-
+            
             ct += 1
-
             #Decrease learning rate every 10 steps until it is smaller than 3*10**-6, then every 120 steps
             if lr_schedule.get_last_lr()[0] <= 3*10**-6:
                 decrease_step = 120
@@ -643,6 +638,24 @@ def training_flow(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs,
             #Update learning rate every decrease_step steps
             if ct % decrease_step == 0:
                 lr_schedule.step()
+                
+        for i, batch in enumerate(val_loader): 
+            x = batch.to(device)
+            z, logdet, prior_z_logprob = flow(x[..., ~mask_cond], x[..., mask_cond])
+            loss = -torch.mean(logdet+prior_z_logprob) 
+            val_running_loss += loss.item()
+            
+        last_val_loss = val_running_loss / len(val_loader)
+        writer.add_scalar('Loss/val', last_val_loss, e)
+        if last_val_loss < best_loss:
+            best_loss = last_val_loss
+            torch.save(flow.state_dict(), f"{checkpoint_dir}checkpoint_best.pth")
+            # print(f'state dict saved checkpoint_best')
+            curr_time = time.perf_counter()
+            np.save(f"{checkpoint_dir}losses_best.npy", np.array(best_loss))
+        val_running_loss = 0.
+            
+            
 
 def training_flow_MixedPrecision(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs, lr=2*10**-2, batch_size=1024, loss_saver=None, checkpoint_dir=None, gamma=0.998, optimizer_obj=None):
     
