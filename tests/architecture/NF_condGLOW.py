@@ -574,7 +574,7 @@ def training_flow(flow:NF_condGLOW, data:pd.DataFrame, cond_names:list,  epochs,
 
     # Convert DataFrame to tensor (index based)
     data = torch.from_numpy(data.values).type(torch.float)
-    train_index, val_index = train_test_split(np.arange(data.shape[0]), test_size=0.1, random_state=42)
+    train_index, val_index = train_test_split(np.arange(data.shape[0]), test_size=0.2, random_state=42)
 
     train_loader = torch.utils.data.DataLoader(data[train_index], batch_size=batch_size, shuffle=True)
     val_loader = torch.utils.data.DataLoader(data[val_index], batch_size=batch_size, shuffle=True)

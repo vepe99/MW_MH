@@ -741,6 +741,7 @@ def prepare_dataloader(dataset, batch_size: int):
         sampler=DistributedSampler(dataset))
 
 def main(rank: int, world_size: int, save_every: int, total_epochs: int, batch_size: int):
+    os.environ["CUDA_VISIBLE_DEVICES"] = "3,9"
     ddp_setup(rank, world_size)
     dataset, model, optimizer = load_train_objs()
     train_data = prepare_dataloader(dataset, batch_size)
@@ -757,7 +758,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', default=1024, type=int, help='Input batch size on each device (default: 32)')
     args = parser.parse_args()
 
-    #world_size = torch.cuda.device_count()
+    #world_size = torch.cuda.device_count()-=0[pol;]
     world_size = 2
     begin=time.time()
     mp.spawn(main, args=(world_size, args.save_every, args.total_epochs, args.batch_size), nprocs=world_size)
