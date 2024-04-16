@@ -734,10 +734,11 @@ class Trainer:
                 self._save_checkpoint(epoch)
 
 def load_train_objs():
-    train_set = pd.read_parquet('/export/home/vgiusepp/MW_MH/data/preprocessing/preprocess_training_set_Galaxy_name.parquet') # load your dataset
+    train_set = pd.read_parquet('/export/home/vgiusepp/MW_MH/data/preprocessing_subsample/preprocess_training_set_Galaxy_name_subsample.parquet') # load your dataset
     train_set = train_set[train_set.columns.difference(['Galaxy_name'], sort=False)]
+    train_set = train_set.sample(frac=1,)
     train_set = torch.from_numpy(train_set.values)
-    model = NF_condGLOW(4, dim_notcond=2, dim_cond=12, CL=NSF_CL2, network_args=[128, 6, 0.2])  # load your model
+    model = NF_condGLOW(8, dim_notcond=2, dim_cond=12, CL=NSF_CL2, network_args=[512, 6, 0.2])  # load your model
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-4)
     return train_set, model, optimizer     
 
