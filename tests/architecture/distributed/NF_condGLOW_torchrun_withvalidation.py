@@ -18,7 +18,8 @@ import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
-
+import torch.distributed as dist
+from torch.utils.tensorboard import SummaryWriter
 
 from sklearn.model_selection import train_test_split 
 import optuna
@@ -669,6 +670,7 @@ class Trainer:
         self,
         model: NF_condGLOW,
         train_data: torch.utils.data.DataLoader,
+        val_data: torch.utils.data.DataLoader,
         optimizer: torch.optim.Optimizer,  
         save_every: int,
         snapshot_path: str,) -> None:
@@ -676,6 +678,7 @@ class Trainer:
         self.model = model.to(self.gpu_id)
         self.train_data = train_data
         self.val_data = val_data
+        self.best_loss = 1_000
         self.optimizer = optimizer
         self.save_every = save_every
         self.epochs_run = 0
@@ -683,6 +686,11 @@ class Trainer:
         if os.path.exists(snapshot_path):
             print("Loading snapshot")
             self._load_snapshot(snapshot_path)
+            
+        if self.gpu_id == 0:
+            self.logger = SummaryWriter()
+        else:
+            self.logger = None
             
         self.model = DDP(self.model, device_ids=[self.gpu_id])
 
@@ -695,38 +703,66 @@ class Trainer:
         print(f"Resuming training from snapshot at Epoch {self.epochs_run}")
 
     def _run_batch(self, source, train=True):
-        mask_cond = np.ones(14).astype(bool)
-        mask_cond[:2] = np.array([0, 0]).astype(bool)
-        #Evaluate model
-        z, logdet, prior_z_logprob = self.model(source[..., ~mask_cond], source[..., mask_cond])
-        
-        #Get loss
-        loss = -torch.mean(logdet+prior_z_logprob) 
-        
         if train==True:
+            mask_cond = np.ones(14).astype(bool)
+            mask_cond[:2] = np.array([0, 0]).astype(bool)
+            #Evaluate model
+            z, logdet, prior_z_logprob = self.model(source[..., ~mask_cond], source[..., mask_cond])
+            
+            #Get loss
+            loss = -torch.mean(logdet+prior_z_logprob) 
+        
             #Set gradients to zero
             self.optimizer.zero_grad()
             #Compute gradients
             loss.backward()
             #Update parameters
             self.optimizer.step()
-        else:
             return loss.item()
+        else:
+            with torch.no_grad():
+                mask_cond = np.ones(14).astype(bool)
+                mask_cond[:2] = np.array([0, 0]).astype(bool)
+                #Evaluate model
+                z, logdet, prior_z_logprob = self.model(source[..., ~mask_cond], source[..., mask_cond])
+                
+                #Get loss
+                loss = -torch.mean(logdet+prior_z_logprob)
+                return loss.item()
 
     def _run_epoch(self, epoch):
         #b_sz = len(next(iter(self.train_data))[0])
         b_sz = self.train_data.batch_size
         print(f"[GPU{self.gpu_id}] Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(self.train_data)}")
         self.train_data.sampler.set_epoch(epoch) # shuffle data
+        train_loss = 0.
         for source in self.train_data:
             source = source.to(self.gpu_id)
-            self._run_batch(source, train=True)
+            train_loss += self._run_batch(source, train=True)/len(self.train_data)
             
-        val_loss = []
+        dist.barrier()
+        self.model.eval()
+        val_running_loss = 0.
         for source in self.val_data:
             source = source.to(self.gpu_id)
             batch_loss = self._run_batch(source, train=False)
-            val_loss.append(batch_loss)
+            val_running_loss += batch_loss/len(self.val_data)
+        dist.barrier()
+        val_running_loss = torch.tensor([val_running_loss]).to(self.gpu_id)
+        dist.all_reduce(val_running_loss, op=dist.ReduceOp.SUM)
+        
+        
+        train_loss =  torch.tensor([train_loss]).to(self.gpu_id)
+        dist.all_reduce(train_loss, op=dist.ReduceOp.SUM)
+        
+        if self.gpu_id == 0:
+            self.logger.add_scalar("Loss/val", val_running_loss/2, epoch)
+            self.logger.add_scalar("Loss/train", train_loss/2, epoch)
+        
+        self.model.train()
+        
+        return val_running_loss/2
+            
                  
     def _save_checkpoint(self, epoch):
         snapshot = {
@@ -738,16 +774,17 @@ class Trainer:
 
     def train(self, max_epochs: int):
         for epoch in range(self.epochs_run, max_epochs):
-            self._run_epoch(epoch)
-            if self.gpu_id == 0 and epoch % self.save_every == 0:
+            val_running_loss = self._run_epoch(epoch)
+            if val_running_loss < self.best_loss and self.gpu_id == 0 :  
+                self.best_loss = val_running_loss
                 self._save_checkpoint(epoch)
 
 def load_train_objs():
-    train_set = pd.read_parquet('/export/home/vgiusepp/MW_MH/data/preprocessing/preprocess_training_set_Galaxy_name.parquet') # load your dataset
+    train_set = pd.read_parquet('/export/home/vgiusepp/MW_MH/data/preprocessing_subsample/preprocess_training_set_Galaxy_name_subsample.parquet') # load your dataset
     train_set = train_set[train_set.columns.difference(['Galaxy_name'], sort=False)]
     train_set = torch.from_numpy(train_set.values)
     train_set, val_set = train_test_split(train_set, test_size=0.2, random_state=42)
-    model = NF_condGLOW(8, dim_notcond=2, dim_cond=12, CL=NSF_CL2, network_args=[128*2, 6, 0.2])  # load your model
+    model = NF_condGLOW(10, dim_notcond=2, dim_cond=12, CL=NSF_CL2, network_args=[64, 3, 0.2])  # load your model
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-4)
     return train_set, val_set, model, optimizer     
 
@@ -774,7 +811,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='simple distributed training job')
     parser.add_argument('total_epochs', type=int, help='Total epochs to train the model')
     parser.add_argument('save_every', type=int, help='How often to save a snapshot')
-    parser.add_argument('--batch_size', default=64, type=int, help='Input batch size on each device (default: 32)')
+    parser.add_argument('--batch_size', default=1024, type=int, help='Input batch size on each device (default: 32)')
     args = parser.parse_args()
 
 
