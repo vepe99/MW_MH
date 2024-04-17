@@ -675,6 +675,7 @@ class Trainer:
         self.gpu_id = int(os.environ["LOCAL_RANK"])
         self.model = model.to(self.gpu_id)
         self.train_data = train_data
+        self.val_data = val_data
         self.optimizer = optimizer
         self.save_every = save_every
         self.epochs_run = 0
@@ -693,7 +694,7 @@ class Trainer:
         self.epochs_run = snapshot["EPOCHS_RUN"]
         print(f"Resuming training from snapshot at Epoch {self.epochs_run}")
 
-    def _run_batch(self, source):
+    def _run_batch(self, source, train=True):
         mask_cond = np.ones(14).astype(bool)
         mask_cond[:2] = np.array([0, 0]).astype(bool)
         #Evaluate model
@@ -701,14 +702,16 @@ class Trainer:
         
         #Get loss
         loss = -torch.mean(logdet+prior_z_logprob) 
-        # losses.append(loss.item())
         
-        #Set gradients to zero
-        self.optimizer.zero_grad()
-        #Compute gradients
-        loss.backward()
-        #Update parameters
-        self.optimizer.step()
+        if train==True:
+            #Set gradients to zero
+            self.optimizer.zero_grad()
+            #Compute gradients
+            loss.backward()
+            #Update parameters
+            self.optimizer.step()
+        else:
+            return loss.item()
 
     def _run_epoch(self, epoch):
         #b_sz = len(next(iter(self.train_data))[0])
@@ -717,8 +720,14 @@ class Trainer:
         self.train_data.sampler.set_epoch(epoch) # shuffle data
         for source in self.train_data:
             source = source.to(self.gpu_id)
-            self._run_batch(source)     
-
+            self._run_batch(source, train=True)
+            
+        val_loss = []
+        for source in self.val_data:
+            source = source.to(self.gpu_id)
+            batch_loss = self._run_batch(source, train=False)
+            val_loss.append(batch_loss)
+                 
     def _save_checkpoint(self, epoch):
         snapshot = {
             "MODEL_STATE": self.model.module.state_dict(),
@@ -740,7 +749,7 @@ def load_train_objs():
     train_set, val_set = train_test_split(train_set, test_size=0.2, random_state=42)
     model = NF_condGLOW(8, dim_notcond=2, dim_cond=12, CL=NSF_CL2, network_args=[128*2, 6, 0.2])  # load your model
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-4)
-    return train_set, model, optimizer     
+    return train_set, val_set, model, optimizer     
 
 def prepare_dataloader(dataset, batch_size: int):
     return torch.utils.data.DataLoader(
@@ -752,9 +761,10 @@ def prepare_dataloader(dataset, batch_size: int):
 
 def main(save_every: int, total_epochs: int, batch_size: int, snapshot_path: str = "snapshot.pt"):
     ddp_setup()
-    dataset, model, optimizer = load_train_objs()
+    dataset, valset, model, optimizer = load_train_objs()
     train_data = prepare_dataloader(dataset, batch_size)
-    trainer = Trainer(model, train_data, optimizer, save_every, snapshot_path)
+    val_data = prepare_dataloader(valset, batch_size)
+    trainer = Trainer(model, train_data, val_data, optimizer, save_every, snapshot_path)
     trainer.train(total_epochs)
     destroy_process_group()
 
@@ -764,7 +774,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='simple distributed training job')
     parser.add_argument('total_epochs', type=int, help='Total epochs to train the model')
     parser.add_argument('save_every', type=int, help='How often to save a snapshot')
-    parser.add_argument('--batch_size', default=1024, type=int, help='Input batch size on each device (default: 32)')
+    parser.add_argument('--batch_size', default=64, type=int, help='Input batch size on each device (default: 32)')
     args = parser.parse_args()
 
 
