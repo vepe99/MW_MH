@@ -784,7 +784,7 @@ def load_train_objs():
     train_set = train_set[train_set.columns.difference(['Galaxy_name'], sort=False)]
     train_set = torch.from_numpy(train_set.values)
     train_set, val_set = train_test_split(train_set, test_size=0.2, random_state=42)
-    model = NF_condGLOW(10, dim_notcond=2, dim_cond=12, CL=NSF_CL2, network_args=[64, 3, 0.2])  # load your model
+    model = NF_condGLOW(3, dim_notcond=2, dim_cond=12, CL=NSF_CL2, network_args=[64, 3, 0.2])  # load your model
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-4)
     return train_set, val_set, model, optimizer     
 
