@@ -781,8 +781,8 @@ class Trainer:
     
     def test(self, test_set):
         print('start test')
+        self.model.eval()
         with torch.no_grad():
-            self.model.eval()
             test_running_loss = 0.
             for source in test_set:
                 source = source.to(self.gpu_id)
@@ -792,17 +792,42 @@ class Trainer:
             dist.all_reduce(test_running_loss, op=dist.ReduceOp.SUM)
             return test_running_loss/2 #the fraction 2 is beacuse of the 2 GPU
 
+def get_even_space_sample(df_mass_masked, low_percentile_mass, high_percentile_mass):
+    len_infall_time = df_mass_masked['infall_time'].unique()
+    index_val_time = np.linspace(0, len_infall_time, 10)
+    time = df_mass_masked['infall_time'].unique()[index_val_time.astype(int)]
+    df_time = df_mass_masked[df_mass_masked['infall_time'].isin(time)]  
+    return df_time
+    
+    
 def load_train_objs():
     train_set = pd.read_parquet('/export/home/vgiusepp/MW_MH/data/preprocessing_subsample/preprocess_training_set_Galaxy_name_subsample.parquet') # load your dataset
-    Galax_name = train_set['Galaxy_name'].unique()
-    test_galaxy = np.random.choice(Galax_name, int(len(Galax_name)*0.1), replace=False)
-    test_set = train_set[train_set['Galaxy_name'].isin(test_galaxy)]
-    test_set.to_parquet('/export/home/vgiusepp/MW_MH/data/test_set.parquet')
-    train_set = train_set[~(train_set['Galaxy_name'].isin(test_galaxy))][train_set.columns.difference(['Galaxy_name'], sort=False)]
-    test_set = test_set[train_set.columns.difference(['Galaxy_name'], sort=False)]
-    test_set = torch.from_numpy(test_set.values)
-    train_set = torch.from_numpy(train_set.values)
-    train_set, val_set = train_test_split(train_set, test_size=0.2, random_state=42)
+    # Galax_name = train_set['Galaxy_name'].unique()
+    # test_galaxy = np.random.choice(Galax_name, int(len(Galax_name)*0.1), replace=False)
+    # test_set = train_set[train_set['Galaxy_name'].isin(test_galaxy)]
+    # test_set.to_parquet('/export/home/vgiusepp/MW_MH/data/test_set.parquet')
+    # train_set = train_set[~(train_set['Galaxy_name'].isin(test_galaxy))][train_set.columns.difference(['Galaxy_name'], sort=False)]
+    # test_set = test_set[train_set.columns.difference(['Galaxy_name'], sort=False)]
+    # test_set = torch.from_numpy(test_set.values)
+    # train_set = torch.from_numpy(train_set.values)
+    # train_set, val_set = train_test_split(train_set, test_size=0.2, random_state=42)
+    
+    low_percentile_mass, high_percentile_mass = np.percentile(train_set['star_log10mass'], 25), np.percentile(train_set['star_log10mass'], 75)
+    low_mass = get_even_space_sample(train_set[train_set['star_log10mass']<=low_percentile_mass])
+    intermediate_mass = get_even_space_sample(train_set[(train_set['star_log10mass']>low_percentile_mass) & (train_set['star_log10mass']<high_percentile_mass)])
+    high_mass = get_even_space_sample(train_set[train_set['star_log10mass']>=high_percentile_mass])
+    val_set = pd.concat([low_mass, intermediate_mass, high_mass])
+    
+    train_set = train_set[~train_set['Galaxy_name'].isin(val_set['Galaxy_name'])]
+    
+    low_percentile_mass, high_percentile_mass = np.percentile(train_set['star_log10mass'], 25), np.percentile(train_set['star_log10mass'], 75)
+    low_mass = get_even_space_sample(train_set[train_set['star_log10mass']<=low_percentile_mass])
+    intermediate_mass = get_even_space_sample(train_set[(train_set['star_log10mass']>low_percentile_mass) & (train_set['star_log10mass']<high_percentile_mass)])
+    high_mass = get_even_space_sample(train_set[train_set['star_log10mass']>=high_percentile_mass])
+    test_set = pd.concat([low_mass, intermediate_mass, high_mass])
+    
+    train_set = train_set[~train_set['Galaxy_name'].isin(test_set['Galaxy_name'])]
+   
     model = NF_condGLOW(10, dim_notcond=2, dim_cond=12, CL=NSF_CL2, network_args=[64, 3, 0.2])  # load your model
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-4)
     return train_set, val_set, test_set, model, optimizer     
@@ -816,8 +841,8 @@ def prepare_dataloader(dataset, batch_size: int):
         sampler=DistributedSampler(dataset))
 
 def main(save_every: int, total_epochs: int, batch_size: int, snapshot_path: str = "snapshot.pt"):
-    ddp_setup()
     train_set, val_set, test_set, model, optimizer = load_train_objs()
+    ddp_setup()
     train_data = prepare_dataloader(train_set, batch_size)
     val_data = prepare_dataloader(val_set, batch_size)
     test_data = prepare_dataloader(test_set, batch_size)
