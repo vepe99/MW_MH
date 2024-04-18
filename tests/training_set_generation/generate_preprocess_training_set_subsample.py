@@ -22,8 +22,10 @@ def normalize(df):
     '''
     for col in df.columns:
 
-        np.savez(f'mean_std_of_{col}.npz', mean=df[col].mean(), std=df[col].std())
-        df[col] = (df[col] - df[col].mean()) / df[col].std()
+        np.savez(f'/mnt/storage/giuseppe_data/MW_MH/data/preprocessing_subsample/mean_std_of_{col}.npz', mean=df[col].mean(), std=df[col].std())
+        # df[col] = (df[col] - df[col].mean()) / df[col].std()
+        
+    df.apply(lambda x: (x - x.mean()) / x.std(), axis=0)
     
 def load_data(observables_path, mass_cut=6*1e9, min_n_star=float, min_feh=float, min_ofe=float):
     
@@ -78,7 +80,7 @@ def main():
     regex = r'^(?!.*error)'
     path_2observables = ['../../data/observables/'+path for path in path_2observables if re.search(regex, path)]
     
-    pool = Pool(processes=20)
+    pool = Pool(processes=100)
     items = zip(path_2observables, [mass_cat]*len(path_2observables), [min_n_star]*len(path_2observables), [min_feh]*len(path_2observables), [min_ofe]*len(path_2observables))
     df_list = pool.starmap(load_data, items)
     df = pd.concat(df_list, ignore_index=True)
