@@ -27,12 +27,14 @@ def load_data(observables_path, mass_cut=6*1e9, min_n_star=float, min_feh=float,
         observables = np.load(observables_path)
         parameters = np.load(parameter_path)
         if len(observables['feh']) > min_n_star:
-            l = len(observables['feh'])
+            l = len([a for a in observables['feh'][(observables['feh']>min_feh) & (observables['ofe']>min_ofe)] ])
             n_subsamples = 500
+            if l < n_subsamples:
+                n_subsamples = l
             subsample = np.random.randint(0, l, n_subsamples)
             data = np.zeros((n_subsamples, len(components)))
-            data[:, 0] = observables['feh'][subsample]
-            data[:, 1] = observables['ofe'][subsample]
+            data[:, 0] = observables['feh'][(observables['feh']>min_feh) & (observables['ofe']>min_ofe)][subsample]
+            data[:, 1] = observables['ofe'][(observables['feh']>min_feh) & (observables['ofe']>min_ofe)][subsample]
             ones = np.ones(n_subsamples)
             data[:, 2] = np.log10(parameters['star_mass'])*ones
             data[:, 3] = np.log10(parameters['gas_mass'])*ones
@@ -48,7 +50,7 @@ def load_data(observables_path, mass_cut=6*1e9, min_n_star=float, min_feh=float,
             data[:, 13] = parameters['chemical_std'][2]*ones
             
             df_temp = pd.DataFrame(data, columns=components)
-            df_temp = df_temp[(df_temp['feh'] > min_feh) & (df_temp['ofe'] > min_ofe)]
+            #df_temp = df_temp[(df_temp['feh'] > min_feh) & (df_temp['ofe'] > min_ofe)]
             df_temp['Galaxy_name'] = [observables_path.replace('../../data/observables/', '').replace('_observables.npz', '') for i in range(len(df_temp))]
             print(len(df_temp))
             return df_temp

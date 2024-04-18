@@ -671,6 +671,7 @@ class Trainer:
         model: NF_condGLOW,
         train_data: torch.utils.data.DataLoader,
         val_data: torch.utils.data.DataLoader,
+        test_data: torch.utils.data.DataLoader,
         optimizer: torch.optim.Optimizer,  
         save_every: int,
         snapshot_path: str,) -> None:
@@ -678,6 +679,7 @@ class Trainer:
         self.model = model.to(self.gpu_id)
         self.train_data = train_data
         self.val_data = val_data
+        self.test_data = test_data
         self.best_loss = 1_000
         self.optimizer = optimizer
         self.save_every = save_every
@@ -751,19 +753,17 @@ class Trainer:
         val_running_loss = torch.tensor([val_running_loss]).to(self.gpu_id)
         dist.all_reduce(val_running_loss, op=dist.ReduceOp.SUM)
         
-        
         train_loss =  torch.tensor([train_loss]).to(self.gpu_id)
         dist.all_reduce(train_loss, op=dist.ReduceOp.SUM)
         
         if self.gpu_id == 0:
-            self.logger.add_scalar("Loss/val", val_running_loss/2, epoch)
-            self.logger.add_scalar("Loss/train", train_loss/2, epoch)
+            self.logger.add_scalar("Loss/val", val_running_loss/2, epoch) #the fraction 2 is beacuse of the 2 GPU
+            self.logger.add_scalar("Loss/train", train_loss/2, epoch) #the fraction 2 is beacuse of the 2 GPU
         
         self.model.train()
         
         return val_running_loss/2
             
-                 
     def _save_checkpoint(self, epoch):
         snapshot = {
             "MODEL_STATE": self.model.module.state_dict(),
@@ -778,15 +778,34 @@ class Trainer:
             if val_running_loss < self.best_loss and self.gpu_id == 0 :  
                 self.best_loss = val_running_loss
                 self._save_checkpoint(epoch)
+    
+    def test(self, test_set):
+        print('start test')
+        with torch.no_grad():
+            self.model.eval()
+            test_running_loss = 0.
+            for source in test_set:
+                source = source.to(self.gpu_id)
+                batch_loss = self._run_batch(source, train=False)
+                test_running_loss += batch_loss/len(test_set)
+            test_running_loss = torch.tensor([test_running_loss]).to(self.gpu_id)
+            dist.all_reduce(test_running_loss, op=dist.ReduceOp.SUM)
+            return test_running_loss/2 #the fraction 2 is beacuse of the 2 GPU
 
 def load_train_objs():
     train_set = pd.read_parquet('/export/home/vgiusepp/MW_MH/data/preprocessing_subsample/preprocess_training_set_Galaxy_name_subsample.parquet') # load your dataset
-    train_set = train_set[train_set.columns.difference(['Galaxy_name'], sort=False)]
+    Galax_name = train_set['Galaxy_name'].unique()
+    test_galaxy = np.random.choice(Galax_name, int(len(Galax_name)*0.1), replace=False)
+    test_set = train_set[train_set['Galaxy_name'].isin(test_galaxy)]
+    test_set.to_parquet('/export/home/vgiusepp/MW_MH/data/test_set.parquet')
+    train_set = train_set[~(train_set['Galaxy_name'].isin(test_galaxy))][train_set.columns.difference(['Galaxy_name'], sort=False)]
+    test_set = test_set[train_set.columns.difference(['Galaxy_name'], sort=False)]
+    test_set = torch.from_numpy(test_set.values)
     train_set = torch.from_numpy(train_set.values)
     train_set, val_set = train_test_split(train_set, test_size=0.2, random_state=42)
     model = NF_condGLOW(10, dim_notcond=2, dim_cond=12, CL=NSF_CL2, network_args=[64, 3, 0.2])  # load your model
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-4)
-    return train_set, val_set, model, optimizer     
+    return train_set, val_set, test_set, model, optimizer     
 
 def prepare_dataloader(dataset, batch_size: int):
     return torch.utils.data.DataLoader(
@@ -798,11 +817,14 @@ def prepare_dataloader(dataset, batch_size: int):
 
 def main(save_every: int, total_epochs: int, batch_size: int, snapshot_path: str = "snapshot.pt"):
     ddp_setup()
-    dataset, valset, model, optimizer = load_train_objs()
-    train_data = prepare_dataloader(dataset, batch_size)
-    val_data = prepare_dataloader(valset, batch_size)
-    trainer = Trainer(model, train_data, val_data, optimizer, save_every, snapshot_path)
+    train_set, val_set, test_set, model, optimizer = load_train_objs()
+    train_data = prepare_dataloader(train_set, batch_size)
+    val_data = prepare_dataloader(val_set, batch_size)
+    test_data = prepare_dataloader(test_set, batch_size)
+    trainer = Trainer(model, train_data, val_data, test_data, optimizer, save_every, snapshot_path)
     trainer.train(total_epochs)
+    test = trainer.test(test_data)
+    np.save('/export/home/vgiusepp/MW_MH/data/test_loss.npy', test.cpu().detach())
     destroy_process_group()
 
 
@@ -816,6 +838,6 @@ if __name__ == "__main__":
 
 
     begin=time.time()
-    main(args.save_every, args.total_epochs, args.batch_size)
+    test = main(args.save_every, args.total_epochs, args.batch_size)
     end = time.time()
     print('total time', (end-begin)/60, 'minutes')
