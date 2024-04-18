@@ -10,8 +10,20 @@ import glob
 
 
 def normalize(df):
-    return df.apply(lambda x: (x.to_numpy() - x.to_numpy().mean()) / x.to_numpy().std(), axis=0)
+    '''
+    Normalize the data in the dataframe by removing to each column the mean and dividing by the standard deviation.
+    Mean and standard deviation are stored in a npz to revert the normalization during inference
 
+    Parameters:
+    df (pandas.DataFrame): The input dataframe to be normalized.
+    
+    Returns:
+    None
+    '''
+    for col in df.columns:
+
+        np.savez(f'mean_std_of_{col}.npz', mean=df[col].mean(), std=df[col].std())
+        df[col] = (df[col] - df[col].mean()) / df[col].std()
     
 def load_data(observables_path, mass_cut=6*1e9, min_n_star=float, min_feh=float, min_ofe=float):
     
@@ -50,7 +62,6 @@ def load_data(observables_path, mass_cut=6*1e9, min_n_star=float, min_feh=float,
             data[:, 13] = parameters['chemical_std'][2]*ones
             
             df_temp = pd.DataFrame(data, columns=components)
-            #df_temp = df_temp[(df_temp['feh'] > min_feh) & (df_temp['ofe'] > min_ofe)]
             df_temp['Galaxy_name'] = [observables_path.replace('../../data/observables/', '').replace('_observables.npz', '') for i in range(len(df_temp))]
             print(len(df_temp))
             return df_temp
@@ -72,9 +83,9 @@ def main():
     df_list = pool.starmap(load_data, items)
     df = pd.concat(df_list, ignore_index=True)
     
-    bad_column = 'Galaxy_name'
-    other_cols = df.columns.difference([bad_column])    
-    df[other_cols] = normalize(df[other_cols]) #nomalization must be then reverted during inference to get the correct results
+    # bad_column = 'Galaxy_name'
+    # other_cols = df.columns.difference([bad_column])    
+    # df[other_cols] = normalize(df[other_cols]) #nomalization must be then reverted during inference to get the correct results
     df.to_parquet('/mnt/storage/giuseppe_data/MW_MH/data/preprocessing_subsample/preprocess_training_set_Galaxy_name_subsample.parquet')
     
 if __name__ == '__main__':

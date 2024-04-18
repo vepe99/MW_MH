@@ -3,6 +3,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import scipy.stats as stats
+from multiprocessing import Pool
+
 
 import pynbody as pb
 
@@ -10,18 +12,6 @@ import glob
 import os
 import re
 from tqdm.notebook import tqdm
-
-# change regex
-all_paths = glob.glob('/mnt/storage/_data/nihao/nihao_classic/g?.??e??/g?.??e??.0????')
-# Regular expression to match files that end with 5 numbers and don't have a dot at the end
-
-# regex = r'^.*\d{5}$' #all the snapshots
-
-
-# # Filter the list of files
-# paths = [path for path in all_paths if re.match(regex, path)]
-
-
 
 
 def extract_parameter_array(path='str', path_parameters='str', path_observables='str') -> None:
@@ -89,52 +79,58 @@ def extract_parameter_array(path='str', path_parameters='str', path_observables=
         try:
             #check if the halos can be loaded
             h = sim.halos(write_fpos=False)
+            h_1 = h[1]
         except:
+            print(f'Halo error {name_file}')
             np.savez(file=path_parameters + name_file + '_halos_error.npz', emppty=np.array([0]))
             np.savez(file=path_observables + name_file + '_halos_error.npz', emppty=np.array([0]))
         else:
-            try:
-                #check if the frame of reference can be set such that the disk is face on
-                pb.analysis.angmom.faceon(h[1])
-            except:
-                np.savez(file=path_parameters + name_file + '_faceon_error.npz', emppty=np.array([0]))
-                np.savez(file=path_observables + name_file + '_faceon_error.npz', emppty=np.array([0]))
-            else:
-                #check if the simualtion has formed stars
-                if len(sim.s['mass']) > 0:
-                    
-                    name_parameter_file = path_parameters + name_file + '_parameters.npz'
-                    name_observable_file = path_observables + name_file + '_observables.npz'
+            #check if the simualtion has formed stars
+            if len(h_1.s['mass']) > 0:
+                
+                name_parameter_file = path_parameters + name_file + '_parameters.npz'
+                name_observable_file = path_observables + name_file + '_observables.npz'
 
-                    #PARAMETERS
-                    star_mass = sim.s['mass'].sum() #in Msol
-                    gas_mass = sim.g['mass'].sum()  #in Msol
-                    dm_mass = sim.dm['mass'].sum()  #in Msol
-                    infall_time = sim.properties['time'].in_units('Gyr')
-                    redshift = sim.properties['z']
-                    a = sim.properties['a']
-                    try: 
-                        #check if the metals, Iron mass fraction and Oxygen mass fraction mean and std can be extracted
-                        chemical_mean = np.array([sim.s['metals'].mean(), sim.s['FeMassFrac'].mean(), sim.s['OxMassFrac'].mean()])
-                        chemical_std = np.array([sim.s['metals'].std(), sim.s['FeMassFrac'].std(), sim.s['OxMassFrac'].std()])
-                    except:
-                        np.savez(file=path_parameters + name_file + '_ZMassFracc_error.npz', emppty=np.array([0]))
-                        np.savez(file=path_observables + name_file + '_ZMassFracc_error.npz', emppty=np.array([0]))
-                    else:
-                        #OBSERVABLE
-                        try:
-                            #check if the [Fe/H] and [O/Fe] can be extracted
-                            feh = sim.s['feh']
-                            ofe = sim.s['ofe']
-                        except:
-                            np.savez(file=path_parameters + name_file + '_FeO_error.npz', emppty=np.array([0]))
-                            np.savez(file=path_observables + name_file + '_FeO_error.npz', emppty=np.array([0]))
-                        else:
-                            np.savez(file=name_parameter_file, star_mass=star_mass, gas_mass=gas_mass, dm_mass=dm_mass, infall_time=infall_time, redshift=redshift, a=a, chemical_mean=chemical_mean, chemical_std=chemical_std)
-                            np.savez(file=name_observable_file, feh=feh, ofe=ofe)
-
+                #PARAMETERS
+                star_mass = h_1.s['mass'].sum() #in Msol
+                gas_mass = h_1.g['mass'].sum()  #in Msol
+                dm_mass = h_1.dm['mass'].sum()  #in Msol
+                infall_time = h_1.properties['time'].in_units('Gyr')
+                redshift = h_1.properties['z']
+                a = h_1.properties['a']
+                try: 
+                    #check if the metals, Iron mass fraction and Oxygen mass fraction mean and std can be extracted
+                    chemical_mean = np.array([h_1.s['metals'].mean(), h_1.s['FeMassFrac'].mean(), h_1.s['OxMassFrac'].mean()])
+                    chemical_std = np.array([h_1.s['metals'].std(), h_1.s['FeMassFrac'].std(), h_1.s['OxMassFrac'].std()])
+                except:
+                    np.savez(file=path_parameters + name_file + '_ZMassFracc_error.npz', emppty=np.array([0]))
+                    np.savez(file=path_observables + name_file + '_ZMassFracc_error.npz', emppty=np.array([0]))
                 else:
-                    print('Not formed stars yet')        
+                    #OBSERVABLE
+                    try:
+                        #check if the [Fe/H] and [O/Fe] can be extracted
+                        feh = h_1.s['feh']
+                        ofe = h_1.s['ofe']
+                    except:
+                        np.savez(file=path_parameters + name_file + '_FeO_error.npz', emppty=np.array([0]))
+                        np.savez(file=path_observables + name_file + '_FeO_error.npz', emppty=np.array([0]))
+                    else:
+                        np.savez(file=name_parameter_file, star_mass=star_mass, gas_mass=gas_mass, dm_mass=dm_mass, infall_time=infall_time, redshift=redshift, a=a, chemical_mean=chemical_mean, chemical_std=chemical_std)
+                        np.savez(file=name_observable_file, feh=feh, ofe=ofe)
+            else:
+                print('Not formed stars yet')        
 
-for path in tqdm(all_paths):
-    extract_parameter_array(path, path_parameters='../../data/parameters/', path_observables='../../data/observables/')
+# for path in tqdm(all_paths):
+#     extract_parameter_array(path, path_parameters='../../data/parameters/', path_observables='../../data/observables/')
+    
+def main():
+    all_paths = glob.glob('/mnt/storage/_data/nihao/nihao_classic/g?.??e??/g?.??e??.0????')
+    path_parameters = '../../data/parameters/'
+    path_observables = '../../data/observables/'
+    
+    pool = Pool(processes=50)
+    items = zip(all_paths, [path_parameters]*len(all_paths), [path_observables]*len(all_paths))
+    pool.starmap(extract_parameter_array, items)
+    
+if __name__ == '__main__':
+    main()
