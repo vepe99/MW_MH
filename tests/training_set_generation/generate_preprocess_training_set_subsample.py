@@ -31,7 +31,7 @@ def load_data(observables_path, mass_cut=6*1e9, min_n_star=float, min_feh=float,
             n_subsamples = 500
             if l < n_subsamples:
                 n_subsamples = l
-            subsample = np.random.randint(0, l, n_subsamples)
+            subsample = np.random.choice(a=range(l), size=n_subsamples, replace=False)
             data = np.zeros((n_subsamples, len(components)))
             data[:, 0] = observables['feh'][(observables['feh']>min_feh) & (observables['ofe']>min_ofe)][subsample]
             data[:, 1] = observables['ofe'][(observables['feh']>min_feh) & (observables['ofe']>min_ofe)][subsample]
