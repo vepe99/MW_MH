@@ -85,40 +85,48 @@ def extract_parameter_array(path='str', path_parameters='str', path_observables=
             np.savez(file=path_parameters + name_file + '_halos_error.npz', emppty=np.array([0]))
             np.savez(file=path_observables + name_file + '_halos_error.npz', emppty=np.array([0]))
         else:
-            #check if the simualtion has formed stars
-            if len(h_1.s['mass']) > 0:
-                
-                name_parameter_file = path_parameters + name_file + '_parameters.npz'
-                name_observable_file = path_observables + name_file + '_observables.npz'
-
-                #PARAMETERS
-                star_mass = np.array(h_1.s['mass'].sum()) #in Msol
-                gas_mass = np.array(h_1.g['mass'].sum())  #in Msol
-                dm_mass = np.array(h_1.dm['mass'].sum())  #in Msol
-                infall_time = np.array(h_1.properties['time'].in_units('Gyr'))
-                redshift = np.array(h_1.properties['z'])
-                a = np.array(h_1.properties['a'])
-                try: 
-                    #check if the metals, Iron mass fraction and Oxygen mass fraction mean and std can be extracted
-                    chemical_mean = np.array([h_1.s['metals'].mean(), h_1.s['FeMassFrac'].mean(), h_1.s['OxMassFrac'].mean()])
-                    chemical_std = np.array([h_1.s['metals'].std(), h_1.s['FeMassFrac'].std(), h_1.s['OxMassFrac'].std()])
-                except:
-                    np.savez(file=path_parameters + name_file + '_ZMassFracc_error.npz', emppty=np.array([0]))
-                    np.savez(file=path_observables + name_file + '_ZMassFracc_error.npz', emppty=np.array([0]))
-                else:
-                    #OBSERVABLE
-                    try:
-                        #check if the [Fe/H] and [O/Fe] can be extracted
-                        feh = h_1.s['feh']
-                        ofe = h_1.s['ofe']
-                    except:
-                        np.savez(file=path_parameters + name_file + '_FeO_error.npz', emppty=np.array([0]))
-                        np.savez(file=path_observables + name_file + '_FeO_error.npz', emppty=np.array([0]))
-                    else:
-                        np.savez(file=name_parameter_file, star_mass=star_mass, gas_mass=gas_mass, dm_mass=dm_mass, infall_time=infall_time, redshift=redshift, a=a, chemical_mean=chemical_mean, chemical_std=chemical_std)
-                        np.savez(file=name_observable_file, feh=feh, ofe=ofe)
+            try: 
+                mass = h_1.s['mass']
+            except:
+                print('Dummy halos')
+                np.savez(file=path_parameters + name_file + '_dummy_error.npz', emppty=np.array([0]))
+                np.savez(file=path_observables + name_file + '_dummy_error.npz', emppty=np.array([0]))
+            
             else:
-                print('Not formed stars yet')        
+                #check if the simualtion has formed stars
+                if len(h_1.s['mass']) > 0:
+                    
+                    name_parameter_file = path_parameters + name_file + '_parameters.npz'
+                    name_observable_file = path_observables + name_file + '_observables.npz'
+
+                    #PARAMETERS
+                    star_mass = np.array(h_1.s['mass'].sum()) #in Msol
+                    gas_mass = np.array(h_1.g['mass'].sum())  #in Msol
+                    dm_mass = np.array(h_1.dm['mass'].sum())  #in Msol
+                    infall_time = np.array(h_1.properties['time'].in_units('Gyr'))
+                    redshift = np.array(h_1.properties['z'])
+                    a = np.array(h_1.properties['a'])
+                    try: 
+                        #check if the metals, Iron mass fraction and Oxygen mass fraction mean and std can be extracted
+                        chemical_mean = np.array([h_1.s['metals'].mean(), h_1.s['FeMassFrac'].mean(), h_1.s['OxMassFrac'].mean()])
+                        chemical_std = np.array([h_1.s['metals'].std(), h_1.s['FeMassFrac'].std(), h_1.s['OxMassFrac'].std()])
+                    except:
+                        np.savez(file=path_parameters + name_file + '_ZMassFracc_error.npz', emppty=np.array([0]))
+                        np.savez(file=path_observables + name_file + '_ZMassFracc_error.npz', emppty=np.array([0]))
+                    else:
+                        #OBSERVABLE
+                        try:
+                            #check if the [Fe/H] and [O/Fe] can be extracted
+                            feh = h_1.s['feh']
+                            ofe = h_1.s['ofe']
+                        except:
+                            np.savez(file=path_parameters + name_file + '_FeO_error.npz', emppty=np.array([0]))
+                            np.savez(file=path_observables + name_file + '_FeO_error.npz', emppty=np.array([0]))
+                        else:
+                            np.savez(file=name_parameter_file, star_mass=star_mass, gas_mass=gas_mass, dm_mass=dm_mass, infall_time=infall_time, redshift=redshift, a=a, chemical_mean=chemical_mean, chemical_std=chemical_std)
+                            np.savez(file=name_observable_file, feh=feh, ofe=ofe)
+                else:
+                    print('Not formed stars yet')        
 
 # for path in tqdm(all_paths):
 #     extract_parameter_array(path, path_parameters='../../data/parameters/', path_observables='../../data/observables/')
@@ -128,7 +136,7 @@ def main():
     path_parameters = '../../data/parameters/'
     path_observables = '../../data/observables/'
     
-    pool = Pool(processes=50)
+    pool = Pool(processes=100)
     items = zip(all_paths, [path_parameters]*len(all_paths), [path_observables]*len(all_paths))
     pool.starmap(extract_parameter_array, items)
     
