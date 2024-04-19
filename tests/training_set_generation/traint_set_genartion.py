@@ -92,12 +92,12 @@ def extract_parameter_array(path='str', path_parameters='str', path_observables=
                 name_observable_file = path_observables + name_file + '_observables.npz'
 
                 #PARAMETERS
-                star_mass = h_1.s['mass'].sum() #in Msol
-                gas_mass = h_1.g['mass'].sum()  #in Msol
-                dm_mass = h_1.dm['mass'].sum()  #in Msol
-                infall_time = h_1.properties['time'].in_units('Gyr')
-                redshift = h_1.properties['z']
-                a = h_1.properties['a']
+                star_mass = np.array(h_1.s['mass'].sum()) #in Msol
+                gas_mass = np.array(h_1.g['mass'].sum())  #in Msol
+                dm_mass = np.array(h_1.dm['mass'].sum())  #in Msol
+                infall_time = np.array(h_1.properties['time'].in_units('Gyr'))
+                redshift = np.array(h_1.properties['z'])
+                a = np.array(h_1.properties['a'])
                 try: 
                     #check if the metals, Iron mass fraction and Oxygen mass fraction mean and std can be extracted
                     chemical_mean = np.array([h_1.s['metals'].mean(), h_1.s['FeMassFrac'].mean(), h_1.s['OxMassFrac'].mean()])
