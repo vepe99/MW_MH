@@ -825,6 +825,7 @@ def load_train_objs():
     intermediate_mass = get_even_space_sample(train_set[(train_set['star_log10mass']>low_percentile_mass) & (train_set['star_log10mass']<high_percentile_mass)])
     high_mass = get_even_space_sample(train_set[train_set['star_log10mass']>=high_percentile_mass])
     test_set = pd.concat([low_mass, intermediate_mass, high_mass])
+    test_set.to_parquet('/export/home/vgiusepp/MW_MH/data/test_set.parquet')
     
     train_set = train_set[~train_set['Galaxy_name'].isin(test_set['Galaxy_name'])]
    
@@ -848,9 +849,10 @@ def main(save_every: int, total_epochs: int, batch_size: int, snapshot_path: str
     test_data = prepare_dataloader(test_set, batch_size)
     trainer = Trainer(model, train_data, val_data, test_data, optimizer, save_every, snapshot_path)
     trainer.train(total_epochs)
-    test = trainer.test(test_data)
-    np.save('/export/home/vgiusepp/MW_MH/data/test_loss.npy', test.cpu().detach())
+    negative_log_likelihood = trainer.test(test_data)
+    np.savez('/export/home/vgiusepp/MW_MH/data/test_loss.npy', nll=negative_log_likelihood.cpu().detach())
     destroy_process_group()
+    
 
 
 if __name__ == "__main__":
