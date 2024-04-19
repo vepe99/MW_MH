@@ -792,11 +792,13 @@ class Trainer:
             dist.all_reduce(test_running_loss, op=dist.ReduceOp.SUM)
             return test_running_loss/2 #the fraction 2 is beacuse of the 2 GPU
 
-def get_even_space_sample(df_mass_masked, low_percentile_mass, high_percentile_mass):
-    len_infall_time = df_mass_masked['infall_time'].unique()
-    index_val_time = np.linspace(0, len_infall_time, 10)
+def get_even_space_sample(df_mass_masked):
+    len_infall_time = len(df_mass_masked['infall_time'].unique())
+    index_val_time = np.linspace(0, len_infall_time-1, 10)
     time = df_mass_masked['infall_time'].unique()[index_val_time.astype(int)]
     df_time = df_mass_masked[df_mass_masked['infall_time'].isin(time)]  
+    print('done')
+
     return df_time
     
     
@@ -825,10 +827,17 @@ def load_train_objs():
     intermediate_mass = get_even_space_sample(train_set[(train_set['star_log10mass']>low_percentile_mass) & (train_set['star_log10mass']<high_percentile_mass)])
     high_mass = get_even_space_sample(train_set[train_set['star_log10mass']>=high_percentile_mass])
     test_set = pd.concat([low_mass, intermediate_mass, high_mass])
-    test_set.to_parquet('/export/home/vgiusepp/MW_MH/data/test_set.parquet')
+    test_set.to_parquet(f'/export/home/vgiusepp/MW_MH/data/test_set_{torch.distributed.get_rank()}.parquet')
     
     train_set = train_set[~train_set['Galaxy_name'].isin(test_set['Galaxy_name'])]
-   
+    print('finish prepare data')
+    #remove the column Galaxy name before passing it to the model
+    test_set = test_set[train_set.columns.difference(['Galaxy_name'], sort=False)]
+    train_set = train_set[train_set.columns.difference(['Galaxy_name'], sort=False)]
+    val_set = val_set[train_set.columns.difference(['Galaxy_name'], sort=False)]
+    test_set = torch.from_numpy(test_set.values)
+    val_set =torch.from_numpy(val_set.values)
+    train_set = torch.from_numpy(train_set.values)
     model = NF_condGLOW(10, dim_notcond=2, dim_cond=12, CL=NSF_CL2, network_args=[64, 3, 0.2])  # load your model
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-4)
     return train_set, val_set, test_set, model, optimizer     
@@ -842,8 +851,8 @@ def prepare_dataloader(dataset, batch_size: int):
         sampler=DistributedSampler(dataset))
 
 def main(save_every: int, total_epochs: int, batch_size: int, snapshot_path: str = "snapshot.pt"):
-    train_set, val_set, test_set, model, optimizer = load_train_objs()
     ddp_setup()
+    train_set, val_set, test_set, model, optimizer = load_train_objs()
     train_data = prepare_dataloader(train_set, batch_size)
     val_data = prepare_dataloader(val_set, batch_size)
     test_data = prepare_dataloader(test_set, batch_size)
@@ -865,6 +874,6 @@ if __name__ == "__main__":
 
 
     begin=time.time()
-    test = main(args.save_every, args.total_epochs, args.batch_size)
+    main(args.save_every, args.total_epochs, args.batch_size)
     end = time.time()
     print('total time', (end-begin)/60, 'minutes')
