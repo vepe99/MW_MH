@@ -741,7 +741,8 @@ class Trainer:
         for source in self.train_data:
             source = source.to(self.gpu_id)
             train_loss += self._run_batch(source, train=True)/len(self.train_data)
-            
+        
+        self.val_data.sampler.set_epoch(epoch)    
         dist.barrier()
         self.model.eval()
         val_running_loss = 0.
@@ -827,7 +828,7 @@ def load_train_objs():
     intermediate_mass = get_even_space_sample(train_set[(train_set['star_log10mass']>low_percentile_mass) & (train_set['star_log10mass']<high_percentile_mass)])
     high_mass = get_even_space_sample(train_set[train_set['star_log10mass']>=high_percentile_mass])
     test_set = pd.concat([low_mass, intermediate_mass, high_mass])
-    test_set.to_parquet(f'/export/home/vgiusepp/MW_MH/data/test_set_{torch.distributed.get_rank()}.parquet')
+    test_set.to_parquet(f'/export/home/vgiusepp/MW_MH/data/test_set.parquet')
     
     train_set = train_set[~train_set['Galaxy_name'].isin(test_set['Galaxy_name'])]
     print('finish prepare data')
@@ -838,7 +839,7 @@ def load_train_objs():
     test_set = torch.from_numpy(test_set.values)
     val_set =torch.from_numpy(val_set.values)
     train_set = torch.from_numpy(train_set.values)
-    model = NF_condGLOW(10, dim_notcond=2, dim_cond=12, CL=NSF_CL2, network_args=[64, 3, 0.2])  # load your model
+    model = NF_condGLOW(2, dim_notcond=2, dim_cond=12, CL=NSF_CL2, network_args=[64, 3, 0.2])  # load your model
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-4)
     return train_set, val_set, test_set, model, optimizer     
 
@@ -859,7 +860,7 @@ def main(save_every: int, total_epochs: int, batch_size: int, snapshot_path: str
     trainer = Trainer(model, train_data, val_data, test_data, optimizer, save_every, snapshot_path)
     trainer.train(total_epochs)
     negative_log_likelihood = trainer.test(test_data)
-    np.savez('/export/home/vgiusepp/MW_MH/data/test_loss.npy', nll=negative_log_likelihood.cpu().detach())
+    np.savez('/export/home/vgiusepp/MW_MH/data/test_loss', nll=negative_log_likelihood.cpu().detach())
     destroy_process_group()
     
 
