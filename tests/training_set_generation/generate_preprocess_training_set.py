@@ -10,6 +10,15 @@ import glob
 
 
 def normalize(df):
+    columns = []
+    for col in df.columns:
+        columns.append(f'mean_{col}')
+        columns.append(f'std_{col}')
+    mean_and_std = pd.DataFrame(columns=columns)
+    for col in df.columns:
+        mean_and_std.loc[0, f'mean_{col}'] = df[col].mean()
+        mean_and_std.loc[0, f'std_{col}'] = df[col].std()   
+    mean_and_std.to_parquet('../../data/preprocessing_subsample/mean_and_std_preprocessing.parquet')    
     return df.apply(lambda x: (x.to_numpy() - x.to_numpy().mean()) / x.to_numpy().std(), axis=0)
 
     
@@ -69,7 +78,7 @@ def main():
     
     bad_column = 'Galaxy_name'
     other_cols = df.columns.difference([bad_column])    
-    df[other_cols] = normalize(df[other_cols]) #nomalization must be then reverted during inference to get the correct results
+    # df[other_cols] = normalize(df[other_cols]) #nomalization must be then reverted during inference to get the correct results
     df.to_parquet('../../data/preprocessing/preprocess_training_set_Galaxy_name.parquet')
     
 if __name__ == '__main__':

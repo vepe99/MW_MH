@@ -78,7 +78,7 @@ def extract_parameter_array(path='str', path_parameters='str', path_observables=
     else:
         try:
             #check if the halos can be loaded
-            h = sim.halos(write_fpos=False)
+            h = sim.halos()
             h_1 = h[1]
         except:
             print(f'Halo error {name_file}')
@@ -127,18 +127,19 @@ def extract_parameter_array(path='str', path_parameters='str', path_observables=
                             np.savez(file=name_observable_file, feh=feh, ofe=ofe)
                 else:
                     print('Not formed stars yet')        
-
-# for path in tqdm(all_paths):
-#     extract_parameter_array(path, path_parameters='../../data/parameters/', path_observables='../../data/observables/')
+                    
+all_paths = glob.glob('/mnt/storage/_data/nihao/nihao_classic/g?.??e??/g?.??e??.0????')
+for path in tqdm(all_paths):
+    extract_parameter_array(path, path_parameters='../../data/parameters/', path_observables='../../data/observables/')
     
-def main():
-    all_paths = glob.glob('/mnt/storage/_data/nihao/nihao_classic/g?.??e??/g?.??e??.0????')
-    path_parameters = '../../data/parameters/'
-    path_observables = '../../data/observables/'
+# def main():
+#     all_paths = glob.glob('/mnt/storage/_data/nihao/nihao_classic/g?.??e??/g?.??e??.0????')
+#     path_parameters = '../../data/parameters/'
+#     path_observables = '../../data/observables/'
     
-    pool = Pool(processes=100)
-    items = zip(all_paths, [path_parameters]*len(all_paths), [path_observables]*len(all_paths))
-    pool.starmap(extract_parameter_array, items)
+#     pool = Pool(processes=100)
+#     items = zip(all_paths, [path_parameters]*len(all_paths), [path_observables]*len(all_paths))
+#     pool.starmap(extract_parameter_array, items)
     
-if __name__ == '__main__':
-    main()
+# if __name__ == '__main__':
+#     main()
