@@ -78,7 +78,7 @@ def main():
     
     bad_column = 'Galaxy_name'
     other_cols = df.columns.difference([bad_column])    
-    # df[other_cols] = normalize(df[other_cols]) #nomalization must be then reverted during inference to get the correct results
+    df[other_cols] = normalize(df[other_cols]) #nomalization must be then reverted during inference to get the correct results
     df.to_parquet('../../data/preprocessing/preprocess_training_set_Galaxy_name.parquet')
     
 if __name__ == '__main__':
