@@ -794,11 +794,17 @@ class Trainer:
             return test_running_loss/2 #the fraction 2 is beacuse of the 2 GPU
 
 def get_even_space_sample(df_mass_masked):
+    '''
+    Given a dataframe of galaxy in a range of mass, it returns 10 equally infall time spaced samples  
+    '''
     len_infall_time = len(df_mass_masked['infall_time'].unique())
     index_val_time = np.linspace(0, len_infall_time-1, 10)
-    time = df_mass_masked['infall_time'].unique()[index_val_time.astype(int)]
-    df_time = df_mass_masked[df_mass_masked['infall_time'].isin(time)]  
-    print('done')
+    time = np.sort(df_mass_masked['infall_time'].unique())[index_val_time.astype(int)]
+    df_time = pd.DataFrame(columns=df_mass_masked.columns)
+    for t in time:
+        temp = df_mass_masked[df_mass_masked['infall_time']==t]
+        galaxy_temp = temp.sample(1)['Galaxy_name'].values[0]
+        df_time = pd.concat((df_time, df_mass_masked[df_mass_masked['Galaxy_name']==galaxy_temp]) )
 
     return df_time
     
@@ -839,7 +845,7 @@ def load_train_objs():
     test_set = torch.from_numpy(test_set.values)
     val_set =torch.from_numpy(val_set.values)
     train_set = torch.from_numpy(train_set.values)
-    model = NF_condGLOW(2, dim_notcond=2, dim_cond=12, CL=NSF_CL2, network_args=[64, 3, 0.2])  # load your model
+    model = NF_condGLOW(10, dim_notcond=2, dim_cond=12, CL=NSF_CL2, network_args=[64, 3, 0.2])  # load your model
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-4)
     return train_set, val_set, test_set, model, optimizer     
 
