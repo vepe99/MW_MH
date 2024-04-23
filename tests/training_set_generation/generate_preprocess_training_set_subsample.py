@@ -20,12 +20,16 @@ def normalize(df):
     Returns:
     None
     '''
+    columns = []
     for col in df.columns:
-
-        np.savez(f'/mnt/storage/giuseppe_data/MW_MH/data/preprocessing_subsample/mean_std_of_{col}.npz', mean=df[col].mean(), std=df[col].std())
-        # df[col] = (df[col] - df[col].mean()) / df[col].std()
-        
-    df.apply(lambda x: (x - x.mean()) / x.std(), axis=0)
+        columns.append(f'mean_{col}')
+        columns.append(f'std_{col}')
+    mean_and_std = pd.DataFrame(columns=columns)
+    for col in df.columns:
+        mean_and_std.loc[0, f'mean_{col}'] = df[col].mean()
+        mean_and_std.loc[0, f'std_{col}'] = df[col].std()   
+    mean_and_std.to_parquet('/mnt/storage/giuseppe_data/MW_MH/data/preprocessing_subsample/mean_and_std_preprocessing.parquet')    
+    return df.apply(lambda x: (x.to_numpy() - x.to_numpy().mean()) / x.to_numpy().std(), axis=0)
     
 def load_data(observables_path, mass_cut=6*1e9, min_n_star=float, min_feh=float, min_ofe=float):
     
@@ -87,7 +91,7 @@ def main():
     
     bad_column = 'Galaxy_name'
     other_cols = df.columns.difference([bad_column])    
-    # df[other_cols] = normalize(df[other_cols]) #nomalization must be then reverted during inference to get the correct results
+    df[other_cols] = normalize(df[other_cols]) #nomalization must be then reverted during inference to get the correct results
     df.to_parquet('/mnt/storage/giuseppe_data/MW_MH/data/preprocessing_subsample/preprocess_training_set_Galaxy_name_subsample.parquet')
     
 if __name__ == '__main__':
