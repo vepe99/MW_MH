@@ -538,13 +538,11 @@ class NF_condGLOW(nn.Module):
         x_cond : torch.Tensor
             The condition for the samples. If dim_cond=0 enter torch.Tensor([]).
         """
-        # return self.backward( self.prior.sample(torch.Size((number,))), torch.from_numpy(x_cond).to(self.device) )[0]
         samples = self.backward( self.prior.sample(torch.Size((number,))), torch.from_numpy(x_cond).to(self.device) )[0]
-        feh_mean, feh_std = torch.from_numpy(np.load('../../data/preprocessing/mean_std_of_feh.npz')['mean']).to(self.device), torch.from_numpy(np.load('../../data/preprocessing/mean_std_of_feh.npz')['std']).to(self.device)
-        ofe_mean, ofe_std = torch.from_numpy(np.load('../../data/preprocessing/mean_std_of_ofe.npz')['mean']).to(self.device), torch.from_numpy(np.load('../../data/preprocessing/mean_std_of_ofe.npz')['std']).to(self.device)
         
-        samples[:, 0] = samples[:, 0]*feh_std + feh_mean
-        samples[:, 1] = samples[:, 1]*ofe_std + ofe_mean
+        mean_and_std = pd.read_parquet('../../data/preprocessing_subsample/mean_and_std_preprocessing.parquet')
+        samples[:, 0] = samples[:, 0]*torch.from_numpy(mean_and_std['std_feh'].values).to(self.device) + torch.from_numpy( mean_and_std['mean_feh'].values).to(self.device)
+        samples[:, 1] = samples[:, 1]*torch.from_numpy(mean_and_std['std_ofe'].values).to(self.device) + torch.from_numpy(mean_and_std['mean_ofe'].values).to(self.device)
         
         return samples
     
@@ -555,6 +553,22 @@ class NF_condGLOW(nn.Module):
         self.prior = torch.distributions.Normal(torch.zeros(self.dim_notcond).to(device), torch.ones(self.dim_notcond).to(device))
         return self
     
+    def get_pdf(self, x, x_cond):
+        """Returns the probability density function of the flow at the given point.
+        
+        Parameters
+        ----------
+        
+        x : torch.Tensor
+            The point at which to evaluate the pdf.
+        x_cond : torch.Tensor
+            The condition for the point.
+        """
+        x = torch.from_numpy(x).to(self.device)
+        x_cond = torch.from_numpy(x_cond).to(self.device)
+        z, logdet, prior_z_logprob = self.forward(x, x_cond)
+        pdf = torch.exp(prior_z_logprob + logdet)
+        return pdf.cpu().detach().numpy()
     
     
     
