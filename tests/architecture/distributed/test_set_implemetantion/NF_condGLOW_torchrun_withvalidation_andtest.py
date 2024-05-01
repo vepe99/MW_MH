@@ -792,8 +792,8 @@ class Trainer:
         dist.all_reduce(train_loss, op=dist.ReduceOp.SUM)
         
         if self.gpu_id == 0:
-            self.logger.add_scalar("Loss/val", val_running_loss/2, epoch) #the fraction 2 is beacuse of the 2 GPU
-            self.logger.add_scalar("Loss/train", train_loss/2, epoch) #the fraction 2 is beacuse of the 2 GPU
+            self.logger.add_scalar("Loss/val", val_running_loss/int(os.environ["WORLD_SIZE"]), epoch) #the WORLD_SIZE is the number of GPUs
+            self.logger.add_scalar("Loss/train", train_loss/int(os.environ["WORLD_SIZE"]), epoch) #the WORLD_SIZE is the number of GPUs
         
         self.model.train()
         
@@ -834,7 +834,7 @@ class Trainer:
                 test_running_loss += batch_loss/len(test_set)
             test_running_loss = torch.tensor([test_running_loss]).to(self.gpu_id)
             dist.all_reduce(test_running_loss, op=dist.ReduceOp.SUM)
-            return test_running_loss/2 #the fraction 2 is beacuse of the 2 GPU
+            return test_running_loss/int(os.environ["WORLD_SIZE"]) #the WORLD_SIZE is the number of GPUs
 
 def get_even_space_sample(df_mass_masked):
     '''
@@ -888,7 +888,7 @@ def load_train_objs():
     test_set = torch.from_numpy(test_set.values)
     val_set =torch.from_numpy(val_set.values)
     train_set = torch.from_numpy(train_set.values)
-    model = NF_condGLOW(12, dim_notcond=2, dim_cond=12, CL=NSF_CL2, network_args=[256, 3, 0.2])  # load your model
+    model = NF_condGLOW(16, dim_notcond=2, dim_cond=12, CL=NSF_CL2, network_args=[512, 6, 0.2])  # load your model
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-4)
     return train_set, val_set, test_set, model, optimizer     
 
@@ -915,6 +915,7 @@ def main(save_every: int, total_epochs: int, batch_size: int, snapshot_path: str
 
 
 if __name__ == "__main__":
+    print(int(os.environ["WORLD_SIZE"]))
     import argparse
     parser = argparse.ArgumentParser(description='simple distributed training job')
     parser.add_argument('total_epochs', type=int, help='Total epochs to train the model')
