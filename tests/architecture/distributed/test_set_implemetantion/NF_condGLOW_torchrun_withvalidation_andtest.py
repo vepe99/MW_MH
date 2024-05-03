@@ -888,7 +888,7 @@ def load_train_objs():
     test_set = torch.from_numpy(test_set.values)
     val_set =torch.from_numpy(val_set.values)
     train_set = torch.from_numpy(train_set.values)
-    model = NF_condGLOW(16, dim_notcond=2, dim_cond=12, CL=NSF_CL2, network_args=[512, 6, 0.2])  # load your model
+    model = NF_condGLOW(12, dim_notcond=2, dim_cond=12, CL=NSF_CL2, network_args=[256, 3, 0.2])  # load your model
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-4)
     return train_set, val_set, test_set, model, optimizer     
 
@@ -920,7 +920,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='simple distributed training job')
     parser.add_argument('total_epochs', type=int, help='Total epochs to train the model')
     parser.add_argument('save_every', type=int, help='How often to save a snapshot')
-    parser.add_argument('--batch_size', default=1024, type=int, help='Input batch size on each device (default: 32)')
+    parser.add_argument('--batch_size', default=256, type=int, help='Input batch size on each device (default: 32)')
     args = parser.parse_args()
 
 
